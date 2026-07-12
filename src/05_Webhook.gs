@@ -481,25 +481,51 @@ function prepareTopicNameSheet() {
     }
   }
 
-  // 2. Buat sheet baru
+  // 2. Cari Chat ID untuk setiap topic (buat link t.me)
+  var chatIdByTopic = {};
+  for (var di2 = 0; di2 < data.length; di2++) {
+    var row2 = data[di2];
+    var tid2 = row2[COL.TOPIC_ID];
+    var cid = row2[COL.CHAT_ID];
+    if (tid2 && tid2.toString().trim() !== '' && tid2.toString().trim() !== '-') {
+      var key2 = tid2.toString().trim();
+      if (!chatIdByTopic[key2] && cid) {
+        // Simpan chat ID untuk bikin link
+        chatIdByTopic[key2] = cid.toString().trim();
+      }
+    }
+  }
+
+  // 3. Buat sheet baru
   var sheet = createOrReplaceSheet_('_IsiNamaTopik');
 
-  // 3. Batch tulis HEADER + DATA (sekali API call)
-  var numCols = 6;
+  // 4. Batch tulis HEADER + DATA (sekali API call)
+  var numCols = 7;
   var output = [];
   // Header
   output.push(['No', 'Topic ID', 'Nama Saat Ini', 'Grup',
-    '✏️ Nama Baru (isi di sini)', '📄 Contoh Pesan']);
+    '🔗 Link Topik (klik untuk lihat)', '✏️ Nama Baru (isi di sini)', '📄 Contoh Pesan']);
 
   // Data rows
   for (var i = 0; i < n; i++) {
     var t = unresolved[i];
     var samples = sampleByTopic[t.topicId] || [];
+
+    // Bikin link t.me
+    var chatId = chatIdByTopic[t.topicId] || '';
+    var link = '';
+    if (chatId) {
+      // Supergroup: -1001234567890 → t.me/c/1234567890/TOPIC_ID
+      var cleanId = chatId.replace(/^-100/, '');
+      link = 'https://t.me/c/' + cleanId + '/' + t.topicId;
+    }
+
     output.push([
       i + 1,
       t.topicId,
       'Topik Tanpa Nama',
       t.groupName || '-',
+      link, // 🔗 Link
       '', // Nama Baru — kosong, diisi user
       samples.length > 0 ? samples.join('\n') : '(tidak ada contoh)'
     ]);
@@ -509,7 +535,7 @@ function prepareTopicNameSheet() {
   var dataRange = sheet.getRange(1, 1, output.length, numCols);
   dataRange.setValues(output);
 
-  // 4. Batch styling header
+  // 5. Batch styling header
   var headerRange = sheet.getRange(1, 1, 1, numCols);
   headerRange
     .setFontWeight('bold')
@@ -517,37 +543,38 @@ function prepareTopicNameSheet() {
     .setFontColor('white')
     .setHorizontalAlignment('center');
 
-  // 5. Styling kolom
+  // 6. Styling kolom
   sheet.setColumnWidths(1, 1, 40);
   sheet.setColumnWidths(2, 1, 80);
   sheet.setColumnWidths(3, 1, 140);
   sheet.setColumnWidths(4, 1, 250);
-  sheet.setColumnWidths(5, 1, 230);
-  sheet.setColumnWidths(6, 1, 350);
+  sheet.setColumnWidths(5, 1, 320); // Link column
+  sheet.setColumnWidths(6, 1, 230); // Nama Baru
+  sheet.setColumnWidths(7, 1, 350); // Contoh Pesan
 
-  // 6. Wrap text kolom contoh
-  sheet.getRange(2, 6, n, 1).setWrap(true);
+  // 7. Wrap text kolom contoh
+  sheet.getRange(2, 7, n, 1).setWrap(true);
 
-  // 7. Highlight kolom input (kuning)
-  sheet.getRange(2, 5, n, 1).setBackground('#fff3cd');
+  // 8. Highlight kolom input (kuning)
+  sheet.getRange(2, 6, n, 1).setBackground('#fff3cd');
 
-  // 8. Row height
+  // 9. Row height
   for (var ri = 0; ri < n; ri++) {
     sheet.setRowHeight(ri + 2, 40);
   }
 
-  // 9. Freeze header + aktifkan
+  // 10. Freeze header + aktifkan
   sheet.setFrozenRows(1);
   getSS().setActiveSheet(sheet);
 
-  // 10. Alert ringkas
+  // 11. Alert ringkas
   ui.alert(
     '✅ Sheet _IsiNamaTopik siap!\n\n'
     + n + ' topik tanpa nama terdaftar.\n\n'
     + 'Cara:\n'
-    + '1. Lihat kolom "📄 Contoh Pesan"\n'
-    + '2. Dari situ tebak nama kotanya\n'
-    + '3. Ketik di kolom kuning "✏️ Nama Baru"\n'
+    + '1. Klik kolom "🔗 Link Topik" — buka di browser/Telegram\n'
+    + '2. Lihat nama topiknya di sana\n'
+    + '3. Ketik nama di kolom kuning "✏️ Nama Baru"\n'
     + '4. Jalankan: ✅ Terapkan Nama dari Sheet'
   );
 }
@@ -577,11 +604,12 @@ function applyTopicNamesFromSheet() {
   }
 
   // Kumpulkan mapping Topic ID → Nama Baru
+  // Kolom: 0=No, 1=TopicID, 2=Nama, 3=Grup, 4=Link, 5=Nama Baru, 6=Contoh
   var nameMap = {};
   for (var i = 1; i < inputData.length; i++) {
     var row = inputData[i];
     var topicId = row[1] ? row[1].toString().trim() : '';
-    var newName = row[4] ? row[4].toString().trim() : '';
+    var newName = row[5] ? row[5].toString().trim() : '';
     if (topicId && newName) {
       nameMap[topicId] = newName;
     }
