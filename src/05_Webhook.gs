@@ -436,104 +436,132 @@ function scanLinkedTopics() {
 // ============================================================
 
 /**
- * Tampilkan daftar topik yang belum punya nama & kasih opsi set manual.
+ * ISI NAMA TOPIK VIA SHEET — cara paling gampang.
+ *
+ * CARA PAKAI:
+ * 1. Jalankan "Siapkan Sheet Isian Nama Topik"
+ * 2. Di sheet baru _IsiNamaTopik, isi kolom "Nama Baru" (E)
+ * 3. Jalankan "Terapkan Nama dari Sheet"
+ * 4. Selesai! Semua baris di log otomatis terupdate.
  */
-function manageTopicNames() {
+
+/**
+ * Step 1: Buat sheet dengan daftar topik tanpa nama + kolom isian.
+ */
+function prepareTopicNameSheet() {
   var unresolved = getUnresolvedTopics_();
   var ui = SpreadsheetApp.getUi();
 
+  var sheet = createOrReplaceSheet_('_IsiNamaTopik');
+
+  // Header
+  var headers = ['No', 'Topic ID', 'Nama Saat Ini', 'Grup', '✏️ Nama Baru (isi di sini)'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
+    .setHorizontalAlignment('center');
+
+  // Isi data
   if (unresolved.length === 0) {
-    ui.alert('✅ Semua topik sudah memiliki nama!');
+    sheet.getRange(2, 1).setValue('✅ Semua topik sudah punya nama!');
+    sheet.getRange(2, 2).setValue('Tidak ada data');
+    getSS().setActiveSheet(sheet);
+    ui.alert('✅ Semua topik sudah punya nama!');
     return;
   }
 
-  // Bangun daftar untuk ditampilkan
-  var list = '📋 Topik Tanpa Nama (' + unresolved.length + '):\n\n';
   unresolved.forEach(function (t, i) {
-    list += (i + 1) + '. ID ' + t.topicId + ' — Grup: ' + t.groupName + '\n';
+    var r = i + 2;
+    sheet.getRange(r, 1).setValue(i + 1).setHorizontalAlignment('center');
+    sheet.getRange(r, 2).setValue(t.topicId).setHorizontalAlignment('center');
+    sheet.getRange(r, 3).setValue('Topik Tanpa Nama');
+    sheet.getRange(r, 4).setValue(t.groupName || '-');
+    sheet.getRange(r, 5).setValue(''); // kosong, diisi user
   });
-  list += '\nGunakan "Set Topic Name" untuk memberi nama.';
 
-  var action = ui.alert(
-    '📋 Topik Tanpa Nama',
-    list,
-    ui.ButtonSet.OK_CANCEL
+  // Styling
+  sheet.setColumnWidths(1, 1, 50);
+  sheet.setColumnWidths(2, 1, 100);
+  sheet.setColumnWidths(3, 1, 180);
+  sheet.setColumnWidths(4, 1, 300);
+  sheet.setColumnWidths(5, 1, 250);
+
+  // Highlight kolom isian
+  var lastRow = unresolved.length + 1;
+  var range = sheet.getRange(2, 5, unresolved.length, 1);
+  range.setBackground('#fff3cd'); // kuning
+
+  getSS().setActiveSheet(sheet);
+
+  ui.alert(
+    '✅ Sheet _IsiNamaTopik siap!\n\n'
+    + 'Cara isi:\n'
+    + '1. ' + unresolved.length + ' topik tanpa nama terdaftar\n'
+    + '2. Ketik nama di kolom kuning "✏️ Nama Baru"\n'
+    + '   Contoh: Kajian Jakarta\n'
+    + '3. Setelah selesai, jalankan:\n'
+    + '   📌 Manajemen Topik > Terapkan Nama dari Sheet\n'
+    + '4. Nama akan terisi otomatis di log & report.'
   );
-
-  if (action === ui.OK) {
-    setTopicNameManually();
-  }
 }
 
 /**
- * Dialog untuk set nama topik secara manual.
- * User memasukkan Topic ID dan nama yang benar.
+ * Step 2: Baca sheet _IsiNamaTopik, simpan nama, update log.
  */
-function setTopicNameManually() {
-  var unresolved = getUnresolvedTopics_();
+function applyTopicNamesFromSheet() {
+  var ss = getSS();
   var ui = SpreadsheetApp.getUi();
+  var sheet = ss.getSheetByName('_IsiNamaTopik');
 
-  if (unresolved.length === 0) {
-    // Kasih opsi input manual untuk topik tertentu
-    var manualId = Browser.inputBox(
-      '🔧 Set Topic Name',
-      'Semua topik sudah punya nama.\n\nMasukkan Topic ID untuk mengubah nama manual:',
-      Browser.Buttons.OK_CANCEL
+  if (!sheet) {
+    ui.alert(
+      '❌ Sheet _IsiNamaTopik tidak ditemukan.\n\n'
+      + 'Jalankan dulu: 📌 Manajemen Topik > Siapkan Sheet Isian Nama Topik'
     );
-    if (manualId === 'cancel' || !manualId) return;
-    manualId = manualId.trim();
-
-    var manualName = Browser.inputBox(
-      '🔧 Set Topic Name',
-      'Masukkan nama untuk Topik ID ' + manualId + ':',
-      Browser.Buttons.OK_CANCEL
-    );
-    if (manualName === 'cancel' || !manualName) return;
-    manualName = manualName.trim();
-
-    PropertiesService.getScriptProperties().setProperty('TOPIC_' + manualId, manualName);
-    // Update sheet juga
-    updateTopicNameInSheet_(manualId, manualName);
-
-    ui.alert('✅ Nama Topik ID ' + manualId + ' disimpan sebagai: ' + manualName);
     return;
   }
 
-  // Tampilkan daftar unresolved — user pilih salah satu
-  var topicList = 'Daftar topik tanpa nama:\n\n';
-  unresolved.forEach(function (t, i) {
-    topicList += (i + 1) + '. ID ' + t.topicId + ' (' + t.groupName + ')\n';
-  });
-  topicList += '\nMasukkan Topic ID yang ingin di-set:';
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) {
+    ui.alert('Sheet kosong.');
+    return;
+  }
 
-  var idRes = Browser.inputBox(
-    '🔧 Set Topic Name',
-    topicList,
-    Browser.Buttons.OK_CANCEL
+  var applied = 0;
+  var errors = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var topicId = row[1]; // Kolom B: Topic ID
+    var newName = row[4]; // Kolom E: Nama Baru
+
+    if (topicId && newName && newName.toString().trim() !== '') {
+      topicId = topicId.toString().trim();
+      newName = newName.toString().trim();
+
+      // Simpan ke PropertiesService
+      PropertiesService.getScriptProperties().setProperty('TOPIC_' + topicId, newName);
+
+      // Update sheet log
+      var updated = updateTopicNameInSheet_(topicId, newName);
+      applied++;
+    }
+  }
+
+  if (applied === 0) {
+    ui.alert(
+      'ℹ️ Tidak ada nama baru ditemukan.\n\n'
+      + 'Isi kolom "✏️ Nama Baru" di sheet _IsiNamaTopik,\n'
+      + 'lalu jalankan ini lagi.'
+    );
+    return;
+  }
+
+  ui.alert(
+    '✅ ' + applied + ' nama topik berhasil diterapkan!\n\n'
+    + 'Semua baris di log & report sudah terupdate.\n'
+    + 'Coba jalankan 📊 Analisa Bulanan untuk lihat hasilnya.'
   );
-  if (idRes === 'cancel' || !idRes) return;
-  var selectedId = idRes.trim();
-
-  // Validasi: pastikan ID ada di daftar unresolved
-  var found = unresolved.some(function (t) { return t.topicId === selectedId; });
-  var label = found ? 'Topik ID ' + selectedId : 'Topik ID baru: ' + selectedId;
-
-  var nameRes = Browser.inputBox(
-    '🔧 Set Topic Name',
-    'Masukkan nama untuk ' + label + ':',
-    Browser.Buttons.OK_CANCEL
-  );
-  if (nameRes === 'cancel' || !nameRes) return;
-  var newName = nameRes.trim();
-  if (!newName) { ui.alert('❌ Nama tidak boleh kosong.'); return; }
-
-  // Simpan ke PropertiesService
-  PropertiesService.getScriptProperties().setProperty('TOPIC_' + selectedId, newName);
-
-  // Update sheet — semua baris dengan Topic ID ini
-  var updated = updateTopicNameInSheet_(selectedId, newName);
-
-  ui.alert('✅ Nama tersimpan!\n\nTopic ID ' + selectedId + ' → ' + newName + '\n' + updated + ' baris diupdate.');
 }
 
 /**

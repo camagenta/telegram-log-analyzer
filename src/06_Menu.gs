@@ -42,8 +42,9 @@ function onOpen() {
 
   // Submenu: Topik Management
   var subTopics = ui.createMenu('📌 Manajemen Topik');
-  subTopics.addItem('📋 Daftar Topik Tanpa Nama', 'manageTopicNames');
-  subTopics.addItem('🔧 Set Topic Name Manual', 'setTopicNameManually');
+  subTopics.addItem('📋 Siapkan Sheet Isian Nama Topik', 'prepareTopicNameSheet');
+  subTopics.addItem('✅ Terapkan Nama dari Sheet', 'applyTopicNamesFromSheet');
+  subTopics.addSeparator();
   subTopics.addItem('🔄 Batch Resolve dari Cache', 'batchResolveTopicNames');
   mainMenu.addSubMenu(subTopics);
   mainMenu.addSeparator();
