@@ -472,7 +472,7 @@ function prepareTopicNameSheet() {
       var key = tid.toString().trim();
       if (sampleByTopic[key] && sampleByTopic[key].length >= 2) continue;
       if (!sampleByTopic[key]) sampleByTopic[key] = [];
-      var txt = row[COL.TEXT] || '';
+      var txt = row[COL.MESSAGE] || '';
       if (txt.length > 80) txt = txt.substring(0, 80) + '…';
       var date = (row[COL.TIMESTAMP] instanceof Date)
         ? formatDate_(row[COL.TIMESTAMP], 'dd/MM')
