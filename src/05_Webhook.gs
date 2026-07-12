@@ -446,16 +446,36 @@ function scanLinkedTopics() {
  */
 
 /**
- * Step 1: Buat sheet dengan daftar topik tanpa nama + kolom isian.
+ * Step 1: Buat sheet dengan daftar topik tanpa nama + kolom isian
+ * + contoh pesan dari setiap topik biar bisa dikenali.
  */
 function prepareTopicNameSheet() {
   var unresolved = getUnresolvedTopics_();
   var ui = SpreadsheetApp.getUi();
+  var data = getAllRows();
+
+  // Kumpulkan 2 contoh pesan per topic ID untuk referensi
+  var sampleByTopic = {};
+  data.forEach(function (row) {
+    var tid = row[COL.TOPIC_ID];
+    if (tid && tid.toString().trim() !== '' && tid.toString().trim() !== '-') {
+      var key = tid.toString().trim();
+      if (!sampleByTopic[key]) sampleByTopic[key] = [];
+      if (sampleByTopic[key].length < 2) {
+        var txt = row[COL.TEXT] || '';
+        if (txt.length > 80) txt = txt.substring(0, 80) + '…';
+        var date = (row[COL.TIMESTAMP] instanceof Date)
+          ? formatDate_(row[COL.TIMESTAMP], 'dd/MM')
+          : '';
+        sampleByTopic[key].push(date + ' ' + txt);
+      }
+    }
+  });
 
   var sheet = createOrReplaceSheet_('_IsiNamaTopik');
 
   // Header
-  var headers = ['No', 'Topic ID', 'Nama Saat Ini', 'Grup', '✏️ Nama Baru (isi di sini)'];
+  var headers = ['No', 'Topic ID', 'Nama Saat Ini', 'Grup', '✏️ Nama Baru (isi di sini)', '📄 Contoh Pesan'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length)
     .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
@@ -477,31 +497,48 @@ function prepareTopicNameSheet() {
     sheet.getRange(r, 3).setValue('Topik Tanpa Nama');
     sheet.getRange(r, 4).setValue(t.groupName || '-');
     sheet.getRange(r, 5).setValue(''); // kosong, diisi user
+
+    // Sample messages
+    var samples = sampleByTopic[t.topicId] || [];
+    sheet.getRange(r, 6).setValue(samples.length > 0 ? samples.join('\n') : '(tidak ada contoh)');
   });
 
   // Styling
-  sheet.setColumnWidths(1, 1, 50);
-  sheet.setColumnWidths(2, 1, 100);
-  sheet.setColumnWidths(3, 1, 180);
-  sheet.setColumnWidths(4, 1, 300);
-  sheet.setColumnWidths(5, 1, 250);
+  sheet.setColumnWidths(1, 1, 40);
+  sheet.setColumnWidths(2, 1, 80);
+  sheet.setColumnWidths(3, 1, 140);
+  sheet.setColumnWidths(4, 1, 250);
+  sheet.setColumnWidths(5, 1, 230);
+  sheet.setColumnWidths(6, 1, 350);
 
-  // Highlight kolom isian
-  var lastRow = unresolved.length + 1;
-  var range = sheet.getRange(2, 5, unresolved.length, 1);
-  range.setBackground('#fff3cd'); // kuning
+  // Wrapping untuk kolom contoh
+  var sampleRange = sheet.getRange(2, 6, unresolved.length, 1);
+  sampleRange.setWrap(true);
+
+  // Highlight kolom isian (kuning)
+  var inputRange = sheet.getRange(2, 5, unresolved.length, 1);
+  inputRange.setBackground('#fff3cd');
+
+  // Set row height biar cukup untuk 2 baris teks
+  for (var i = 0; i < unresolved.length; i++) {
+    sheet.setRowHeight(i + 2, 40);
+  }
+
+  // Freeze header
+  sheet.setFrozenRows(1);
 
   getSS().setActiveSheet(sheet);
 
   ui.alert(
     '✅ Sheet _IsiNamaTopik siap!\n\n'
     + 'Cara isi:\n'
-    + '1. ' + unresolved.length + ' topik tanpa nama terdaftar\n'
-    + '2. Ketik nama di kolom kuning "✏️ Nama Baru"\n'
+    + '1. Lihat kolom "📄 Contoh Pesan" — itu contoh chat dari topik tsb\n'
+    + '2. Dari contoh, kamu bisa tebak nama kotanya\n'
+    + '3. Ketik nama di kolom kuning "✏️ Nama Baru"\n'
     + '   Contoh: Kajian Jakarta\n'
-    + '3. Setelah selesai, jalankan:\n'
+    + '4. Setelah semua diisi, jalankan:\n'
     + '   📌 Manajemen Topik > Terapkan Nama dari Sheet\n'
-    + '4. Nama akan terisi otomatis di log & report.'
+    + '5. Nama otomatis terisi di log & report.'
   );
 }
 

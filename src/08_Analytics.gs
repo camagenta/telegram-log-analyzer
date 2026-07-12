@@ -468,6 +468,7 @@ function buildAktivitasHarian_(rows) {
  */
 function buildRekapTopik_(rows) {
   var topics = {};
+  var props = PropertiesService.getScriptProperties();
 
   rows.forEach(function (row) {
     var topicId = row[COL.TOPIC_ID];
@@ -477,8 +478,13 @@ function buildRekapTopik_(rows) {
     if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
       var key = topicId.toString();
       if (!topics[key]) {
+        // Priority: 1) PropertiesService cache, 2) sheet, 3) fallback
+        var cachedName = props.getProperty('TOPIC_' + key);
+        var displayName = cachedName || 
+          ((topicName && topicName !== '-') ? topicName : null);
+
         topics[key] = {
-          name: (topicName && topicName !== '-') ? topicName : 'Topik #' + key,
+          name: displayName || 'Topik #' + key,
           group: chatTitle,
           count: 0
         };
