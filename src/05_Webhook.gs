@@ -193,10 +193,11 @@ function resolveTopicName_(chatId, topicId, msg) {
 /**
  * Dapatkan daftar topik yang belum terresolve namanya (versi cepat).
  * Scan semua baris di sheet, cari Topic ID unik dengan nama '-'.
+ * @param {Array<Array>} [rows] Opsional — data baris yg sudah dibaca, biar nggak baca 2×.
  * @return {Array<{chatId: string, topicId: string, groupName: string}>}
  */
-function getUnresolvedTopics_() {
-  var rows = getAllRows();
+function getUnresolvedTopics_(rows) {
+  if (!rows) rows = getAllRows();
   var unresolved = {};
   var resolved = {};
 
@@ -450,8 +451,11 @@ function scanLinkedTopics() {
  * Optimasi: sekali baca data, sekali tulis data, minim API call.
  */
 function prepareTopicNameSheet() {
-  var unresolved = getUnresolvedTopics_();
   var ui = SpreadsheetApp.getUi();
+
+  // Baca data SEKALI, dipakai untuk unresolved + sampling
+  var data = getAllRows();
+  var unresolved = getUnresolvedTopics_(data);
   var n = unresolved.length;
 
   if (n === 0) {
@@ -459,8 +463,7 @@ function prepareTopicNameSheet() {
     return;
   }
 
-  // 1. Kumpulkan 2 contoh pesan per topic ID (dalam memory — cepat)
-  var data = getAllRows();
+  // 1. Kumpulkan 2 contoh pesan per topic ID
   var sampleByTopic = {};
   for (var di = 0; di < data.length; di++) {
     var row = data[di];
