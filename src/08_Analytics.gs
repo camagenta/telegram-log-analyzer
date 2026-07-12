@@ -856,17 +856,18 @@ function formatReportForTelegram_(report) {
   var monthName = getMonthName_(p.month);
   var lb = '\n';
 
+  // Gunakan HTML tags (<b>) biar aman dari karakter khusus
   var text = '';
-  text += '📊 *LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM*' + lb;
+  text += '📊 <b>LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM</b>' + lb;
   text += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + lb;
   text += '🗓️ ' + monthName + ' ' + p.year + lb + lb;
   text += '━━━━━━━━━━━━━━━━━━━' + lb;
-  text += '📝 *Total Pesan:* ' + report.totalMessages + lb + lb;
+  text += '📝 <b>Total Pesan:</b> ' + report.totalMessages + lb + lb;
 
   // 1. Grup
-  text += '━ *1. REKAP PER GRUP*' + lb;
+  text += '━ <b>1. REKAP PER GRUP</b>' + lb;
   report.perGroup.slice(0, 5).forEach(function (g) {
-    text += '  ▫ ' + g.name + ': *' + g.count + '* pesan' + lb;
+    text += '  ▫ ' + escapeHtml_(g.name) + ': <b>' + g.count + '</b> pesan' + lb;
   });
   if (report.perGroup.length > 5) {
     text += '  ...dan ' + (report.perGroup.length - 5) + ' grup lainnya' + lb;
@@ -874,47 +875,58 @@ function formatReportForTelegram_(report) {
   text += lb;
 
   // 2. Distribusi Tipe
-  text += '━ *2. TIPE PESAN*' + lb;
+  text += '━ <b>2. TIPE PESAN</b>' + lb;
   report.distribusi.forEach(function (t) {
-    text += '  ▫ ' + t.type + ': *' + t.count + '* (' + t.percentage + '%)' + lb;
+    text += '  ▫ ' + escapeHtml_(t.type) + ': <b>' + t.count + '</b> (' + t.percentage + '%)' + lb;
   });
   text += lb;
 
   // 3. Top 5 User
-  text += '━ *3. TOP 5 USER*' + lb;
+  text += '━ <b>3. TOP 5 USER</b>' + lb;
   report.ranking.slice(0, 5).forEach(function (u, i) {
-    text += '  ' + (i + 1) + '. ' + u.name + ': *' + u.count + '* pesan' + lb;
+    text += '  ' + (i + 1) + '. ' + escapeHtml_(u.name) + ': <b>' + u.count + '</b> pesan' + lb;
   });
   text += lb;
 
   // 4. Harian
-  text += '━ *4. AKTIVITAS HARIAN*' + lb;
-  text += '  ▫ Total hari: *' + report.daily.totalDays + '* hari' + lb;
-  text += '  ▫ Rata-rata: *' + report.daily.avgPerDay + '* pesan/hari' + lb;
-  text += '  ▫ Tersibuk: ' + report.daily.maxDay.date + ' (*' + report.daily.maxDay.count + '* pesan)' + lb;
+  text += '━ <b>4. AKTIVITAS HARIAN</b>' + lb;
+  text += '  ▫ Total hari: <b>' + report.daily.totalDays + '</b> hari' + lb;
+  text += '  ▫ Rata-rata: <b>' + report.daily.avgPerDay + '</b> pesan/hari' + lb;
+  text += '  ▫ Tersibuk: ' + report.daily.maxDay.date + ' (<b>' + report.daily.maxDay.count + '</b> pesan)' + lb;
   text += lb;
 
   // 5. File
   if (report.fileRecap.totalFiles > 0) {
-    text += '━ *5. FILE TERSIMPAN*' + lb;
-    text += '  ▫ Total: *' + report.fileRecap.totalFiles + '* file' + lb;
-    text += '  ▫ Ukuran: *' + report.fileRecap.totalSizeMB.toFixed(1) + '* MB' + lb;
+    text += '━ <b>5. FILE TERSIMPAN</b>' + lb;
+    text += '  ▫ Total: <b>' + report.fileRecap.totalFiles + '</b> file' + lb;
+    text += '  ▫ Ukuran: <b>' + report.fileRecap.totalSizeMB.toFixed(1) + '</b> MB' + lb;
     text += lb;
   }
 
   // 6. MoM
   if (report.comparison.hasPrevData) {
-    text += '━ *6. BANDINGAN BULAN LALU*' + lb;
-    text += '  ▫ Sebelumnya: *' + report.comparison.prevTotal + '* pesan' + lb;
+    text += '━ <b>6. BANDINGAN BULAN LALU</b>' + lb;
+    text += '  ▫ Sebelumnya: <b>' + report.comparison.prevTotal + '</b> pesan' + lb;
     var arrow = report.comparison.diff >= 0 ? '📈' : '📉';
-    text += '  ▫ ' + arrow + ' *' + (report.comparison.diff >= 0 ? '+' : '') + report.comparison.diff
-      + '* (' + report.comparison.percentChange + '%)' + lb;
+    text += '  ▫ ' + arrow + ' <b>' + (report.comparison.diff >= 0 ? '+' : '') + report.comparison.diff
+      + '</b> (' + report.comparison.percentChange + '%)' + lb;
   } else {
-    text += '━ *6. BANDINGAN*' + lb;
+    text += '━ <b>6. BANDINGAN</b>' + lb;
     text += '  ▫ Belum ada data bulan sebelumnya.' + lb;
   }
 
   return text;
+}
+
+/**
+ * Escape HTML characters biar aman untuk parse_mode HTML.
+ */
+function escapeHtml_(str) {
+  if (!str) return '';
+  return str.toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /**
@@ -1082,13 +1094,11 @@ function generateAndSendScheduledReport() {
   var text = formatReportForTelegram_(report);
 
   // 3. Ganti header dengan custom header
-  text = text.replace(/^📊.*$/m, '📊 *' + customHeader + '*');
+  text = text.replace(/^📊.*$/m, '📊 <b>' + escapeHtml_(customHeader) + '</b>');
   text = text.replace(/^━━.*$/m, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-  // 4. Kirim ke Telegram (split if needed)
-  var opts = {
-    parse_mode: 'Markdown'
-  };
+  // 4. Kirim ke Telegram (split if needed, pake HTML mode aman)
+  var opts = {};
   if (targetTopic) {
     opts.message_thread_id = parseInt(targetTopic) || targetTopic;
   }
