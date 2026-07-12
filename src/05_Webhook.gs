@@ -302,22 +302,19 @@ function parseForwardInfo_(msg) {
 // ============================================================
 
 /**
- * Cek grup yang terhubung — output ke sheet baru.
+ * Cek grup yang terhubung — output ke sheet baru (batch).
  */
 function checkLinkedGroups() {
   var rows = getAllRows();
   var groups = {};
 
-  rows.forEach(function (row) {
-    var chatId = row[COL.CHAT_ID].toString();
-    var chatTitle = row[COL.TITLE];
-
-    if (chatId.indexOf('-') === 0) {
-      if (!groups[chatId]) {
-        groups[chatId] = chatTitle;
-      }
+  for (var di = 0; di < rows.length; di++) {
+    var chatId = rows[di][COL.CHAT_ID].toString();
+    var chatTitle = rows[di][COL.TITLE];
+    if (chatId.indexOf('-') === 0 && !groups[chatId]) {
+      groups[chatId] = chatTitle;
     }
-  });
+  }
 
   var groupList = [];
   for (var id in groups) {
@@ -327,22 +324,27 @@ function checkLinkedGroups() {
   }
   groupList.sort(function (a, b) { return a.title.localeCompare(b.title); });
 
-  // Output ke sheet baru
+  // Batch tulis
   var sheet = createOrReplaceSheet_('_GrupTerhubung');
-  var row = 1;
-  sheet.getRange(row, 1, 1, 3)
-    .setValues([['No', 'Nama Grup', 'Chat ID']])
-    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white');
-  row++;
+  var output = [['No', 'Nama Grup', 'Chat ID']];
   groupList.forEach(function (g, i) {
-    sheet.getRange(row, 1).setValue(i + 1).setHorizontalAlignment('center');
-    sheet.getRange(row, 2).setValue(g.title);
-    sheet.getRange(row, 3).setValue(g.id);
-    row++;
+    output.push([i + 1, g.title, g.id]);
   });
+
+  sheet.getRange(1, 1, output.length, 3).setValues(output);
+
+  // Styling
+  sheet.getRange(1, 1, 1, 3)
+    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
+    .setHorizontalAlignment('center');
+  if (output.length > 1) {
+    sheet.getRange(2, 1, output.length - 1, 1).setHorizontalAlignment('center');
+  }
+
   sheet.setColumnWidths(1, 1, 50);
   sheet.setColumnWidths(2, 1, 300);
   sheet.setColumnWidths(3, 1, 200);
+  sheet.setFrozenRows(1);
   getSS().setActiveSheet(sheet);
 
   SpreadsheetApp.getUi().alert(
@@ -362,64 +364,70 @@ function isValidTopicId_(str) {
 }
 
 /**
- * Scan topik/thread — output ke sheet baru + alert ringkasan.
+ * Scan topik/thread — output ke sheet baru (batch).
  */
 function scanLinkedTopics() {
-  var rows = getAllRows();
+  var data = getAllRows();
   var topics = {};
+  var props = PropertiesService.getScriptProperties();
+  var allPropKeys = props.getProperties(); // Load sekaligus
 
-  rows.forEach(function (row) {
+  for (var di = 0; di < data.length; di++) {
+    var row = data[di];
     var rawId = row[COL.TOPIC_ID];
     var threadName = row[COL.TOPIC_NAME];
     var groupName = row[COL.TITLE];
 
-    // Validasi: Topic ID harus numeric, bukan file ID / URL / metadata
-    if (!isValidTopicId_(rawId)) return;
+    // Validasi: Topic ID harus numeric
+    if (!isValidTopicId_(rawId)) continue;
 
     var key = rawId.toString().trim();
     if (!topics[key]) {
+      // Cek di PropertiesService dulu
+      var cachedName = allPropKeys['TOPIC_' + key];
+      var displayName = cachedName || 
+        ((threadName && threadName !== '-') ? threadName : null);
       topics[key] = {
-        name: (threadName && threadName !== '-') ? threadName : 'Topik Tanpa Nama',
+        name: displayName || 'Topik Tanpa Nama',
         group: groupName || '-'
       };
-    } else {
-      // Update name jika sebelumnya '-' dan sekarang ada
-      if (topics[key].name === 'Topik Tanpa Nama' && threadName && threadName !== '-') {
-        topics[key].name = threadName;
-      }
     }
-  });
-
-  // Output ke sheet baru
-  var sheet = createOrReplaceSheet_('_ScanTopik');
-  var row = 1;
-  sheet.getRange(row, 1, 1, 4)
-    .setValues([['No', 'Nama Topik', 'Topic ID', 'Grup']])
-    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white');
-  row++;
+  }
 
   var sortedIds = Object.keys(topics).sort(function (a, b) {
     return parseInt(a) - parseInt(b);
   });
 
+  // Batch tulis
+  var sheet = createOrReplaceSheet_('_ScanTopik');
+  var output = [['No', 'Nama Topik', 'Topic ID', 'Grup']];
   var countNamed = 0;
   var countUnnamed = 0;
 
-  sortedIds.forEach(function (id) {
+  sortedIds.forEach(function (id, idx) {
     var t = topics[id];
-    sheet.getRange(row, 1).setValue(row - 1).setHorizontalAlignment('center');
-    sheet.getRange(row, 2).setValue(t.name);
-    sheet.getRange(row, 3).setValue(id);
-    sheet.getRange(row, 4).setValue(t.group);
+    output.push([idx + 1, t.name, id, t.group]);
     if (t.name === 'Topik Tanpa Nama') countUnnamed++;
     else countNamed++;
-    row++;
   });
+
+  sheet.getRange(1, 1, output.length, 4).setValues(output);
+
+  // Styling header
+  sheet.getRange(1, 1, 1, 4)
+    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
+    .setHorizontalAlignment('center');
+
+  // Alignment No
+  if (output.length > 1) {
+    sheet.getRange(2, 1, output.length - 1, 1).setHorizontalAlignment('center');
+  }
 
   sheet.setColumnWidths(1, 1, 50);
   sheet.setColumnWidths(2, 1, 300);
   sheet.setColumnWidths(3, 1, 100);
   sheet.setColumnWidths(4, 1, 300);
+  sheet.setFrozenRows(1);
   getSS().setActiveSheet(sheet);
 
   SpreadsheetApp.getUi().alert(
@@ -428,7 +436,7 @@ function scanLinkedTopics() {
     + '✓ Bernama: ' + countNamed + '\n'
     + '✗ Tanpa Nama: ' + countUnnamed + '\n\n'
     + 'Detail ada di sheet: _ScanTopik\n'
-    + 'Gunakan 📌 Manajemen Topik > Set Topic Name untuk isi yang kosong.'
+    + 'Gunakan 📌 Manajemen Topik untuk isi yang kosong.'
   );
 }
 
@@ -634,6 +642,14 @@ function applyTopicNamesFromSheet() {
   // Update sheet log: baca SEKALI, update memory, tulis SEKALI
   var logSheet = getSheet();
   var logData = logSheet.getDataRange().getValues();
+
+  // Safety: pastikan kolom cukup
+  var expectedCols = COL.TOPIC_NAME + 1; // 16
+  if (logData.length === 0 || logData[0].length < expectedCols) {
+    ui.alert('❌ Struktur log sheet tidak sesuai. Jalankan:\n🤖 Dashboard Bot > 1. Setup Log Sheet');
+    return;
+  }
+
   var updatedCount = 0;
 
   for (var ri = 1; ri < logData.length; ri++) {
