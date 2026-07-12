@@ -107,6 +107,175 @@ function buildFullReport_(filtered, allRows, year, month) {
 }
 
 /**
+ * Build full report for custom date range (skip MoM comparison).
+ */
+function buildFullReportCustom_(filtered, allRows, startDate, endDate) {
+  // For custom ranges, try to compare with previous period of same length
+  var prevStart = new Date(startDate.getTime());
+  var prevEnd = new Date(endDate.getTime());
+  var rangeMs = endDate.getTime() - startDate.getTime();
+  prevStart.setTime(prevStart.getTime() - rangeMs - 86400000); // day before start
+  prevEnd.setTime(startDate.getTime() - 86400000); // day before start = previous period end
+
+  var prevData = filterByDateRange_(allRows, prevStart, prevEnd);
+  var comparison = prevData.length > 0 ? {
+    hasPrevData: true,
+    currentTotal: filtered.length,
+    prevTotal: prevData.length,
+    diff: filtered.length - prevData.length,
+    percentChange: ((filtered.length - prevData.length) / prevData.length * 100).toFixed(1),
+    direction: filtered.length >= prevData.length ? 'naik' : 'turun',
+    groupComparison: []
+  } : { hasPrevData: false, currentTotal: filtered.length, prevTotal: 0, message: 'Tidak ada data periode sebelumnya.' };
+
+  return {
+    period: {
+      year: startDate.getFullYear(),
+      month: startDate.getMonth() + 1,
+      startDate: startDate,
+      endDate: endDate
+    },
+    totalMessages: filtered.length,
+    perGroup: buildRekapPerGroup_(filtered),
+    perUser: buildRekapPerUser_(filtered),
+    perType: buildRekapPerType_(filtered),
+    ranking: buildRankingAktivitas_(filtered),
+    distribusi: buildDistribusiTipe_(filtered),
+    daily: buildAktivitasHarian_(filtered),
+    topik: buildRekapTopik_(filtered),
+    fileRecap: buildRekapFile_(filtered),
+    comparison: comparison
+  };
+}
+
+// ============================================================
+//  CUSTOM DATE RANGE
+// ============================================================
+
+/**
+ * Tampilkan dialog input tanggal untuk custom range report.
+ */
+function showCustomRangeDialog() {
+  var ui = SpreadsheetApp.getUi();
+
+  var startRes = ui.prompt(
+    '📅 Custom Range — Tanggal Mulai',
+    'Masukkan tanggal mulai (format: YYYY-MM-DD atau DD/MM/YYYY)\nContoh: 2026-06-12',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (startRes.getSelectedButton() !== ui.Button.OK) return;
+  var startDate = parseDate_(startRes.getResponseText().trim());
+  if (!startDate) {
+    ui.alert('❌ Format tanggal tidak valid. Gunakan YYYY-MM-DD atau DD/MM/YYYY.');
+    return;
+  }
+
+  var endRes = ui.prompt(
+    '📅 Custom Range — Tanggal Akhir',
+    'Masukkan tanggal akhir (format: YYYY-MM-DD atau DD/MM/YYYY)\nContoh: 2026-07-11',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (endRes.getSelectedButton() !== ui.Button.OK) return;
+  var endDate = parseDate_(endRes.getResponseText().trim());
+  if (!endDate) {
+    ui.alert('❌ Format tanggal tidak valid.');
+    return;
+  }
+
+  if (endDate < startDate) {
+    ui.alert('❌ Tanggal akhir harus setelah tanggal mulai.');
+    return;
+  }
+
+  // Execute
+  var result = JSON.parse(generateCustomRangeReport(
+    Utilities.formatDate(startDate, 'GMT+7', 'yyyy-MM-dd'),
+    Utilities.formatDate(endDate, 'GMT+7', 'yyyy-MM-dd')
+  ));
+
+  if (result.success) {
+    ui.alert(
+      '✅ Report selesai!',
+      '📄 Sheet: ' + result.sheetName + '\n'
+      + '📝 Total: ' + result.totalMessages + ' pesan\n'
+      + '📅 ' + result.label,
+      ui.ButtonSet.OK
+    );
+  } else {
+    ui.alert('❌ ' + result.error);
+  }
+}
+
+/**
+ * Generate report untuk custom date range.
+ * @param {string} startDateStr Format YYYY-MM-DD
+ * @param {string} endDateStr Format YYYY-MM-DD
+ * @return {string} JSON { success, sheetName, totalMessages, ... }
+ */
+function generateCustomRangeReport(startDateStr, endDateStr) {
+  try {
+    assertConfig();
+
+    if (!startDateStr || !endDateStr) {
+      return JSON.stringify({ success: false, error: 'Tanggal mulai dan akhir harus diisi.' });
+    }
+
+    var startDate = parseDate_(startDateStr);
+    var endDate = parseDate_(endDateStr);
+    if (!startDate || !endDate) {
+      return JSON.stringify({ success: false, error: 'Format tanggal tidak valid. Gunakan YYYY-MM-DD.' });
+    }
+    if (endDate < startDate) {
+      return JSON.stringify({ success: false, error: 'Tanggal akhir harus setelah tanggal mulai.' });
+    }
+
+    var allRows = getAllRows();
+    if (allRows.length === 0) {
+      return JSON.stringify({ success: false, error: 'Sheet utama masih kosong.' });
+    }
+
+    var filtered = filterByDateRange_(allRows, startDate, endDate);
+    if (filtered.length === 0) {
+      return JSON.stringify({
+        success: false,
+        error: 'Tidak ada data dari ' + formatDate_(startDate, 'dd/MM/yyyy')
+          + ' sampai ' + formatDate_(endDate, 'dd/MM/yyyy') + '.'
+      });
+    }
+
+    // Build report
+    var report = buildFullReportCustom_(filtered, allRows, startDate, endDate);
+
+    // Label untuk sheet
+    var label = formatDate_(startDate, 'dd MMM') + ' — ' + formatDate_(endDate, 'dd MMM yyyy');
+    var sheetName = exportToSheet_(report, {
+      customRange: true,
+      label: label
+    });
+
+    var topUser = report.ranking.length > 0 ? report.ranking[0] : null;
+
+    return JSON.stringify({
+      success: true,
+      sheetName: sheetName,
+      totalMessages: filtered.length,
+      label: label,
+      summary: {
+        groups: Object.keys(report.perGroup).length,
+        users: Object.keys(report.perUser).length,
+        types: report.distribusi.length,
+        topUser: topUser ? topUser.name : '-',
+        topUserCount: topUser ? topUser.count : 0
+      }
+    });
+
+  } catch (e) {
+    console.error('generateCustomRangeReport error:', e.toString());
+    return JSON.stringify({ success: false, error: e.toString() });
+  }
+}
+
+/**
  * Kirim laporan via Telegram — dipanggil dari menu.
  * Tanya dulu mau kirim ke Chat ID mana.
  */
@@ -438,17 +607,30 @@ function buildMonthComparison_(allRows, year, month) {
 //  EXPORT KE SHEET BARU
 // ============================================================
 
-function exportToSheet_(report) {
-  var p = report.period;
-  var monthName = getMonthName_(p.month);
-  var sheetName = 'Rekap_' + p.year + '_' + padZero_(p.month);
+function exportToSheet_(report, opt) {
+  opt = opt || {};
+  var isCustom = opt.customRange || false;
+
+  var sheetName, headerTitle;
+  if (isCustom && opt.label) {
+    // Custom range → "Rekap_12Jun-11Jul_2026"
+    sheetName = 'Rekap_Custom_' + opt.label.replace(/[^a-zA-Z0-9]/g, '_');
+    if (sheetName.length > 50) sheetName = 'Rekap_Custom_' + new Date().getTime();
+    headerTitle = '📊 REKAP: ' + opt.label;
+  } else {
+    // Default monthly
+    var p = report.period;
+    var monthName = getMonthName_(p.month);
+    sheetName = 'Rekap_' + p.year + '_' + padZero_(p.month);
+    headerTitle = '📊 REKAP BULANAN: ' + monthName + ' ' + p.year;
+  }
 
   var newSheet = createOrReplaceSheet_(sheetName);
   var row = 1;
 
   // --- HEADER UTAMA ---
   newSheet.getRange(row, 1)
-    .setValue('📊 REKAP BULANAN: ' + monthName + ' ' + p.year)
+    .setValue(headerTitle)
     .setFontWeight('bold').setFontSize(14);
   newSheet.getRange(row, 2)
     .setValue('Total Pesan: ' + report.totalMessages)

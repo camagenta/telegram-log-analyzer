@@ -86,6 +86,52 @@ function parseSizeFromMetadata_(metadata) {
 }
 
 /**
+ * Filter array of rows berdasarkan custom date range.
+ * Kolom timestamp di index COL.TIMESTAMP (0).
+ * @param {Array<Array>} rows Data baris (tanpa header)
+ * @param {Date} startDate Tanggal mulai (inclusive)
+ * @param {Date} endDate Tanggal akhir (inclusive, di-set ke 23:59:59)
+ * @return {Array<Array>}
+ */
+function filterByDateRange_(rows, startDate, endDate) {
+  var end = new Date(endDate.getTime());
+  end.setHours(23, 59, 59, 999);
+
+  return rows.filter(function (row) {
+    var ts = row[COL.TIMESTAMP];
+    if (!ts) return false;
+
+    var d = (ts instanceof Date) ? ts : new Date(ts);
+    if (isNaN(d.getTime())) return false;
+
+    return d >= startDate && d <= end;
+  });
+}
+
+/**
+ * Parse string tanggal "YYYY-MM-DD" atau "DD/MM/YYYY" ke Date.
+ * @param {string} str
+ * @return {Date|null}
+ */
+function parseDate_(str) {
+  if (!str) return null;
+
+  // Format ISO: 2026-06-12
+  var m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+
+  // Format DD/MM/YYYY: 12/06/2026
+  m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+
+  // Format DD-MM-YYYY
+  m = str.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (m) return new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+
+  return null;
+}
+
+/**
  * Format tanggal ke string (GMT+7 / WIB).
  * @param {Date} date
  * @param {string} format

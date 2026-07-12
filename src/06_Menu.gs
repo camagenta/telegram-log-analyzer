@@ -29,8 +29,10 @@ function onOpen() {
 
   // Submenu: Analisa Bulanan
   var subAnalisa = ui.createMenu('📊 Analisa Bulanan');
-  subAnalisa.addItem('📋 Generate Report (Pilih Bulan)', 'showMonthlyReportPicker');
-  subAnalisa.addItem('📈 Report Bulan Terakhir', 'quickLastMonthReport');
+  subAnalisa.addItem('📋 Per Bulan (Pilih Bulan)', 'showMonthlyReportPicker');
+  subAnalisa.addItem('📈 Bulan Terakhir', 'quickLastMonthReport');
+  subAnalisa.addSeparator();
+  subAnalisa.addItem('📅 Custom Range (Tanggal Manual)', 'showCustomRangeDialog');
   subAnalisa.addSeparator();
   subAnalisa.addItem('📤 Kirim Report ke Telegram', 'sendMonthlyReportToTelegram');
   subAnalisa.addSeparator();
@@ -57,7 +59,8 @@ function onOpen() {
   //  MENU KEDUA: ⚡ Quick Actions
   // -------------------------
   ui.createMenu('⚡ Quick Actions')
-    .addItem('📊 Report Bulanan', 'showMonthlyReportPicker')
+    .addItem('📊 Per Bulan', 'showMonthlyReportPicker')
+    .addItem('📅 Custom Range', 'showCustomRangeDialog')
     .addItem('📤 Kirim ke Telegram', 'sendMonthlyReportToTelegram')
     .addItem('🔄 Refresh', 'refreshDataValidation')
     .addToUi();
