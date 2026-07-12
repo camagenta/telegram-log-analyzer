@@ -998,12 +998,13 @@ function setupScheduledReport() {
 
 /**
  * Kirim teks panjang (split >4000 chars).
+ * @return {Object} {ok: bool, sent: number, error: string}
  */
 function sendLongText_(chatId, text, opts) {
   var maxLen = 4000;
   if (text.length <= maxLen) {
-    sendText(chatId, text, opts);
-    return 1;
+    var res = sendText(chatId, text, opts);
+    return { ok: res && res.ok, sent: res && res.ok ? 1 : 0, error: res && !res.ok ? JSON.stringify(res) : '' };
   }
 
   var parts = [];
@@ -1021,6 +1022,7 @@ function sendLongText_(chatId, text, opts) {
   }
 
   var sent = 0;
+  var lastError = '';
   parts.forEach(function (part, i) {
     if (i > 0) {
       part = '_(lanjutan)_\n' + part;
@@ -1028,27 +1030,37 @@ function sendLongText_(chatId, text, opts) {
     if (i < parts.length - 1) {
       part += '\n\n_(bersambung...)__';
     }
-    sendText(chatId, part, opts);
-    sent++;
+    var res = sendText(chatId, part, opts);
+    if (res && res.ok) {
+      sent++;
+    } else {
+      lastError = res ? JSON.stringify(res) : 'no response';
+    }
   });
-  return sent;
+
+  return { ok: sent > 0, sent: sent, error: lastError };
 }
 
 /**
  * Generate report bulan lalu + kirim ke Telegram.
  * Fungsi ini dipanggil oleh trigger otomatis.
+ * @return {Object} {ok, error?, sent?, sheetName?}
  */
 function generateAndSendScheduledReport() {
   var props = PropertiesService.getScriptProperties();
-  var targetChat = props.getProperty('SCHEDULE_CHAT_ID') || '@sijadwalkajian';
-  var targetTopic = props.getProperty('SCHEDULE_TOPIC_ID') || '192';
+  var targetChat = props.getProperty('SCHEDULE_CHAT_ID') || '';
+  var targetTopic = props.getProperty('SCHEDULE_TOPIC_ID') || '';
   var customHeader = props.getProperty('SCHEDULE_HEADER') || 'LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM';
+
+  // Validasi konfigurasi
+  if (!targetChat) {
+    return { ok: false, error: 'SCHEDULE_CHAT_ID belum di-set. Jalankan Setup Target & Header dulu.' };
+  }
 
   // Dapatkan bulan terakhir yg punya data
   var available = getAvailableMonths();
   if (available.length === 0) {
-    console.log('Scheduled report: tidak ada data');
-    return;
+    return { ok: false, error: 'Tidak ada data log.' };
   }
 
   var latest = available[0];
@@ -1056,38 +1068,47 @@ function generateAndSendScheduledReport() {
   var filtered = filterByMonth_(allRows, latest.year, latest.month);
 
   if (filtered.length === 0) {
-    console.log('Scheduled report: data kosong untuk ' + latest.year + '-' + latest.month);
-    return;
+    return { ok: false, error: 'Data kosong untuk ' + latest.year + '-' + latest.month };
   }
 
   // 1. Generate sheet (artefak)
   var sheetResult = JSON.parse(generateMonthlyReport(latest.year, latest.month));
   if (!sheetResult.success) {
-    console.log('Scheduled report: gagal generate sheet - ' + sheetResult.error);
-    return;
+    return { ok: false, error: 'Gagal generate sheet: ' + sheetResult.error };
   }
 
   // 2. Build text report
   var report = buildFullReport_(filtered, allRows, latest.year, latest.month);
   var text = formatReportForTelegram_(report);
 
-  // 3. Ganti header pertama dengan custom header
+  // 3. Ganti header dengan custom header
   text = text.replace(/^📊.*$/m, '📊 *' + customHeader + '*');
   text = text.replace(/^━━.*$/m, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // 4. Kirim ke Telegram (split if needed)
   var opts = {
-    parse_mode: 'Markdown',
-    message_thread_id: parseInt(targetTopic) || targetTopic
+    parse_mode: 'Markdown'
   };
+  if (targetTopic) {
+    opts.message_thread_id = parseInt(targetTopic) || targetTopic;
+  }
 
-  var sentCount = sendLongText_(targetChat, text, opts);
+  var sendResult = sendLongText_(targetChat, text, opts);
 
-  console.log(
-    'Scheduled report selesai: ' + getMonthName_(latest.month) + ' ' + latest.year
-    + ' → ' + targetChat + ' (topic:' + targetTopic + ')'
-    + ', ' + sentCount + ' pesan terkirim'
-  );
+  if (!sendResult.ok) {
+    return {
+      ok: false,
+      error: 'Gagal kirim ke Telegram. Response: ' + sendResult.error,
+      sheetName: sheetResult.sheetName
+    };
+  }
+
+  return {
+    ok: true,
+    sent: sendResult.sent,
+    sheetName: sheetResult.sheetName,
+    target: targetChat + (targetTopic ? ' (topic:' + targetTopic + ')' : '')
+  };
 }
 
 /**
@@ -1138,6 +1159,19 @@ function removeMonthlyReportTrigger() {
  */
 function testScheduledReport() {
   var ui = SpreadsheetApp.getUi();
-  generateAndSendScheduledReport();
-  ui.alert('✅ Test report selesai! Cek Telegram.');
+  var result = generateAndSendScheduledReport();
+
+  if (result.ok) {
+    ui.alert(
+      '✅ Report terkirim!\n\n'
+      + 'Tujuan: ' + result.target + '\n'
+      + 'Pesan terkirim: ' + result.sent + '\n'
+      + 'Sheet: ' + result.sheetName + '\n\n'
+      + 'Cek Telegram sekarang.'
+    );
+  } else {
+    ui.alert(
+      '❌ Gagal:\n\n' + result.error
+    );
+  }
 }

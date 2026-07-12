@@ -22,7 +22,7 @@ function sendText(chatId, text, opts) {
     parse_mode: opts && opts.parse_mode ? opts.parse_mode : 'HTML'
   };
 
-  // Merge optional params
+  // Merge optional params (override parse_mode if needed)
   if (opts) {
     for (var key in opts) {
       if (opts.hasOwnProperty(key)) payload[key] = opts[key];
@@ -36,9 +36,12 @@ function sendText(chatId, text, opts) {
   };
 
   try {
-    UrlFetchApp.fetch(url, options);
+    var response = UrlFetchApp.fetch(url, options);
+    var result = JSON.parse(response.getContentText());
+    return result; // return API response for debugging
   } catch (e) {
     console.error('sendText error:', e.toString());
+    return { ok: false, error: e.toString() };
   }
 }
 
