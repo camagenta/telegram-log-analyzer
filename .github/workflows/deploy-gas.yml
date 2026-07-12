@@ -1,0 +1,44 @@
+name: 🚀 Deploy to Google Apps Script
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy GAS Project
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 🔧 Install clasp
+        run: npm install -g @google/clasp
+
+      - name: 🔑 Auth clasp
+        run: |
+          mkdir -p ~/.clasp
+          echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
+
+      - name: 📝 Inject Script ID
+        run: |
+          # Update .clasp.json dengan Script ID dari Secrets
+          sed -i "s/YOUR_SCRIPT_ID_HERE/${{ secrets.GAS_SCRIPT_ID }}/g" .clasp.json
+          echo "🔍 .clasp.json:"
+          cat .clasp.json
+
+      - name: 🚀 Push to GAS
+        run: clasp push -f
+
+      - name: ✅ Verify Deployment
+        run: |
+          echo "✅ Deploy success!"
+          clasp status

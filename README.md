@@ -93,23 +93,84 @@ telegram-log-analyzer/
 3. Sheet baru `Rekap_2026_07` muncul dengan 8 section analisa
 4. Atau ketik `/report` di Telegram untuk laporan singkat
 
-## 🛠️ Local Development (clasp)
+## 🚀 Setup Automation (clasp + GitHub Actions)
+
+Dengan automation ini kamu **gak perlu copy-paste manual** ke editor GAS. Cukup push ke GitHub, otomatis terdeploy.
+
+### 1. Install clasp + Login (SEKALI)
 
 ```bash
-# Install clasp
-npm install -g @google/clasp
+# Dari folder project
+npm install
+npm run login   # Akan buka browser untuk OAuth login
+```
 
-# Login
-clasp login
+### 2. Dapatkan Script ID
 
-# Clone project
-clasp clone <SCRIPT_ID>
+Buka [script.google.com](https://script.google.com) → project kamu → **File > Project settings > Script ID**
 
-# Pull changes
-clasp pull
+### 3. Update .clasp.json
 
-# Push changes
-clasp push
+```json
+{
+  "scriptId": "1abc...YOUR_SCRIPT_ID...xyz",
+  "rootDir": "./src"
+}
+```
+
+### 4. Deploy Manual via Terminal
+
+```bash
+npm run push     # Push semua file ke GAS
+npm run deploy   # Push + buat deployment baru
+npm run open     # Buka GAS editor di browser
+```
+
+Setelah ini, kapan pun kamu ubah kode dan jalankan `npm run push`, GAS project langsung terupdate 🎉
+
+---
+
+### 🤖 GitHub Actions — Auto Deploy on Push
+
+Biar setiap kali push ke `main` otomatis terdeploy, kita pakai GitHub Actions.
+
+#### Setup Secrets (SEKALI)
+
+1. Dapatkan token clasp:
+
+```bash
+clasp login --no-localhost
+cat ~/.clasprc.json    # Copy seluruh isinya
+```
+
+2. Buka repo GitHub → **Settings > Secrets and variables > Actions**
+3. Tambah 2 secrets:
+
+| Secret | Isi |
+|--------|-----|
+| `CLASPRC_JSON` | Isi file `~/.clasprc.json` (hasil `clasp login`) |
+| `GAS_SCRIPT_ID` | Script ID dari GAS project |
+
+4. **Selesai!** Setiap push ke `main` akan trigger workflow `.github/workflows/deploy-gas.yml`
+
+### Workflow yang sudah disiapkan
+
+```yaml
+# .github/workflows/deploy-gas.yml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm install -g @google/clasp
+      - run: echo "${{ secrets.CLASPRC_JSON }}" > ~/.clasprc.json
+      - run: sed -i "s/YOUR_SCRIPT_ID_HERE/${{ secrets.GAS_SCRIPT_ID }}/g" .clasp.json
+      - run: clasp push -f
 ```
 
 ## 🔐 Keamanan

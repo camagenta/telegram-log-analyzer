@@ -1,0 +1,20 @@
+{
+  "name": "telegram-log-analyzer",
+  "version": "1.0.0",
+  "description": "Telegram Bot Log Analyzer - Google Apps Script",
+  "private": true,
+  "scripts": {
+    "login": "clasp login",
+    "logout": "clasp logout",
+    "push": "clasp push",
+    "pull": "clasp pull",
+    "deploy": "clasp push && clasp deploy",
+    "status": "clasp status",
+    "open": "clasp open",
+    "versions": "clasp versions",
+    "gas:setup": "echo '1. clasp login\n2. clasp clone <SCRIPT_ID> atau edit .clasp.json\n3. clasp push'"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  }
+}
