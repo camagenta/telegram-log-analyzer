@@ -147,7 +147,19 @@ function doPost(e) {
 
 /**
  * Resolve nama topik dari message thread.
- * Simpan nama yang ditemukan ke PropertiesService.
+ *
+ * CARA KERJA:
+ * 1. Jika pesan ini adalah system message `forum_topic_created` atau
+ *    `forum_topic_edited`, baca nama langsung dari situ.
+ * 2. Jika nama sudah pernah disimpan di PropertiesService, pakai itu.
+ * 3. Jika tidak ada → '-'
+ *
+ * CATATAN: Telegram Bot API TIDAK BISA forward service messages,
+ * jadi auto-discovery via forwardMessage tidak mungkin.
+ * Solusi: gunakan manual naming (menu > Topics > Set Topic Name)
+ * atau disable privacy mode di @BotFather agar bot menerima
+ * event `forum_topic_created` langsung.
+ *
  * @param {number|string} chatId
  * @param {string} topicId
  * @param {Object} msg Message object dari Telegram
@@ -159,7 +171,7 @@ function resolveTopicName_(chatId, topicId, msg) {
   var props = PropertiesService.getScriptProperties();
   var savedName = props.getProperty('TOPIC_' + topicId);
 
-  // 1. Cek apakah ada perubahan nama topik
+  // 1. Cek apakah pesan ini berisi info pembuatan/editan topik
   var newNameDetected = '';
   if (msg.forum_topic_created) {
     newNameDetected = msg.forum_topic_created.name;
@@ -175,55 +187,65 @@ function resolveTopicName_(chatId, topicId, msg) {
   // 2. Jika sudah pernah disimpan, pakai itu
   if (savedName) return savedName;
 
-  // 3. DISCOVERY MODE: forward pancingan
-  var discoveredName = fetchTopicNameByForwarding_(chatId, topicId, msg.from ? msg.from.id : chatId);
-  if (discoveredName) {
-    props.setProperty('TOPIC_' + topicId, discoveredName);
-    return discoveredName;
-  }
-
   return '-';
 }
 
 /**
- * Discovery nama topik dengan forward pancingan.
- * Forward pesan pembuatan topik ke user, baca responsenya, lalu hapus.
- * @param {number|string} fromChatId
- * @param {number} messageIdToForward
- * @param {number|string} targetChatId
- * @return {string|null}
+ * Dapatkan daftar topik yang belum terresolve namanya.
+ * Scan semua baris di sheet, cari Topic ID unik dengan nama '-'.
+ * @return {Array<{chatId: string, topicId: string, groupName: string}>}
  */
-function fetchTopicNameByForwarding_(fromChatId, messageIdToForward, targetChatId) {
-  try {
-    console.log('=== DISCOVERY START ===');
-    console.log('From Chat:', fromChatId, 'Message ID:', messageIdToForward);
+function getUnresolvedTopics_() {
+  var rows = getAllRows();
+  var unresolved = {};
+  var resolved = {};
 
-    var data = forwardMessage(fromChatId, messageIdToForward, targetChatId);
-    if (!data || !data.ok || !data.result) {
-      console.error('Forward Failed:', JSON.stringify(data));
-      return null;
+  // Kumpulin semua topik beserta statusnya
+  rows.forEach(function (row) {
+    var topicId = row[COL.TOPIC_ID];
+    var topicName = row[COL.TOPIC_NAME];
+    var chatId = row[COL.CHAT_ID];
+    var groupName = row[COL.TITLE];
+
+    if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
+      var key = topicId.toString().trim();
+
+      // Cek apakah nama sudah di-set di PropertiesService
+      var savedName = PropertiesService.getScriptProperties().getProperty('TOPIC_' + key);
+
+      if (savedName && savedName !== '-') {
+        resolved[key] = { name: savedName };
+      } else if (!topicName || topicName === '-' || topicName.toString().trim() === '') {
+        if (!unresolved[key]) {
+          unresolved[key] = {
+            chatId: chatId,
+            topicId: key,
+            groupName: groupName,
+            exampleName: '' // akan diisi dari baris lain
+          };
+        }
+      } else {
+        resolved[key] = { name: topicName };
+      }
     }
+  });
 
-    var forwardedMsg = data.result;
-    var discoveredName = null;
-
-    if (forwardedMsg.forum_topic_created) {
-      discoveredName = forwardedMsg.forum_topic_created.name;
-      console.log('✅ Topic Name Found:', discoveredName);
-    } else {
-      console.log('❌ No forum_topic_created in forwarded message');
+  // Konversi ke array
+  var result = [];
+  for (var key in unresolved) {
+    if (unresolved.hasOwnProperty(key) && !resolved[key]) {
+      result.push(unresolved[key]);
     }
-
-    // Hapus pesan pancingan
-    deleteMessage(targetChatId, forwardedMsg.message_id);
-
-    console.log('=== DISCOVERY END:', discoveredName || 'FAILED', '===');
-    return discoveredName;
-
-  } catch (e) {
-    console.error('Discovery error:', e.toString());
-    return null;
   }
+
+  // Urutkan berdasarkan topicId (numeric)
+  result.sort(function (a, b) {
+    var na = parseInt(a.topicId) || 0;
+    var nb = parseInt(b.topicId) || 0;
+    return na - nb;
+  });
+
+  return result;
 }
 
 // ============================================================
@@ -346,5 +368,173 @@ function scanLinkedTopics() {
     count === 0
       ? 'Belum ada data topik yang terdeteksi. Pastikan kolom Topic ID sudah terisi.'
       : output
+  );
+}
+
+// ============================================================
+//  TOPIK MANAGEMENT — Manual Naming
+// ============================================================
+
+/**
+ * Tampilkan daftar topik yang belum punya nama & kasih opsi set manual.
+ */
+function manageTopicNames() {
+  var unresolved = getUnresolvedTopics_();
+  var ui = SpreadsheetApp.getUi();
+
+  if (unresolved.length === 0) {
+    ui.alert('✅ Semua topik sudah memiliki nama!');
+    return;
+  }
+
+  // Bangun daftar untuk ditampilkan
+  var list = '📋 Topik Tanpa Nama (' + unresolved.length + '):\n\n';
+  unresolved.forEach(function (t, i) {
+    list += (i + 1) + '. ID ' + t.topicId + ' — Grup: ' + t.groupName + '\n';
+  });
+  list += '\nGunakan "Set Topic Name" untuk memberi nama.';
+
+  var action = ui.alert(
+    '📋 Topik Tanpa Nama',
+    list,
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (action === ui.OK) {
+    setTopicNameManually();
+  }
+}
+
+/**
+ * Dialog untuk set nama topik secara manual.
+ * User memasukkan Topic ID dan nama yang benar.
+ */
+function setTopicNameManually() {
+  var unresolved = getUnresolvedTopics_();
+  var ui = SpreadsheetApp.getUi();
+
+  if (unresolved.length === 0) {
+    // Kasih opsi input manual untuk topik tertentu
+    var manualId = Browser.inputBox(
+      '🔧 Set Topic Name',
+      'Semua topik sudah punya nama.\n\nMasukkan Topic ID untuk mengubah nama manual:',
+      Browser.Buttons.OK_CANCEL
+    );
+    if (manualId === 'cancel' || !manualId) return;
+    manualId = manualId.trim();
+
+    var manualName = Browser.inputBox(
+      '🔧 Set Topic Name',
+      'Masukkan nama untuk Topik ID ' + manualId + ':',
+      Browser.Buttons.OK_CANCEL
+    );
+    if (manualName === 'cancel' || !manualName) return;
+    manualName = manualName.trim();
+
+    PropertiesService.getScriptProperties().setProperty('TOPIC_' + manualId, manualName);
+    // Update sheet juga
+    updateTopicNameInSheet_(manualId, manualName);
+
+    ui.alert('✅ Nama Topik ID ' + manualId + ' disimpan sebagai: ' + manualName);
+    return;
+  }
+
+  // Tampilkan daftar unresolved — user pilih salah satu
+  var topicList = 'Daftar topik tanpa nama:\n\n';
+  unresolved.forEach(function (t, i) {
+    topicList += (i + 1) + '. ID ' + t.topicId + ' (' + t.groupName + ')\n';
+  });
+  topicList += '\nMasukkan Topic ID yang ingin di-set:';
+
+  var idRes = Browser.inputBox(
+    '🔧 Set Topic Name',
+    topicList,
+    Browser.Buttons.OK_CANCEL
+  );
+  if (idRes === 'cancel' || !idRes) return;
+  var selectedId = idRes.trim();
+
+  // Validasi: pastikan ID ada di daftar unresolved
+  var found = unresolved.some(function (t) { return t.topicId === selectedId; });
+  var label = found ? 'Topik ID ' + selectedId : 'Topik ID baru: ' + selectedId;
+
+  var nameRes = Browser.inputBox(
+    '🔧 Set Topic Name',
+    'Masukkan nama untuk ' + label + ':',
+    Browser.Buttons.OK_CANCEL
+  );
+  if (nameRes === 'cancel' || !nameRes) return;
+  var newName = nameRes.trim();
+  if (!newName) { ui.alert('❌ Nama tidak boleh kosong.'); return; }
+
+  // Simpan ke PropertiesService
+  PropertiesService.getScriptProperties().setProperty('TOPIC_' + selectedId, newName);
+
+  // Update sheet — semua baris dengan Topic ID ini
+  var updated = updateTopicNameInSheet_(selectedId, newName);
+
+  ui.alert('✅ Nama tersimpan!\n\nTopic ID ' + selectedId + ' → ' + newName + '\n' + updated + ' baris diupdate.');
+}
+
+/**
+ * Update nama topik di semua baris sheet yang punya Topic ID tertentu.
+ * @param {string} topicId
+ * @param {string} newName
+ * @return {number} Jumlah baris yang diupdate
+ */
+function updateTopicNameInSheet_(topicId, newName) {
+  var sheet = getSheet();
+  var data = sheet.getDataRange().getValues();
+  var updatedCount = 0;
+
+  // Kolom Topic Name = index 15 (COL.TOPIC_NAME)
+  for (var i = 1; i < data.length; i++) { // mulai dari baris 2 (skip header)
+    var rowTopicId = data[i][COL.TOPIC_ID];
+    if (rowTopicId && rowTopicId.toString() === topicId) {
+      sheet.getRange(i + 1, COL.TOPIC_NAME + 1).setValue(newName);
+      updatedCount++;
+    }
+  }
+
+  return updatedCount;
+}
+
+/**
+ * Batch re-discover: scan semua topik yang masih '-' dan coba resolve.
+ * Untuk topik yang sudah ada nama di PropertiesService, update sheet.
+ */
+function batchResolveTopicNames() {
+  var rows = getAllRows();
+  var props = PropertiesService.getScriptProperties();
+  var resolved = {};
+  var updated = 0;
+
+  rows.forEach(function (row, idx) {
+    var topicId = row[COL.TOPIC_ID];
+    var topicName = row[COL.TOPIC_NAME];
+
+    if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
+      var key = topicId.toString().trim();
+      var savedName = props.getProperty('TOPIC_' + key);
+
+      if (savedName && savedName !== '-' && (!topicName || topicName === '-')) {
+        // Ada di PropertiesService tapi belum di sheet → update
+        resolved[key] = savedName;
+      }
+    }
+  });
+
+  // Update sheet
+  for (var key in resolved) {
+    if (resolved.hasOwnProperty(key)) {
+      var n = updateTopicNameInSheet_(key, resolved[key]);
+      updated += n;
+    }
+  }
+
+  SpreadsheetApp.getUi().alert(
+    updated > 0
+      ? '✅ ' + updated + ' baris diupdate dari PropertiesService.'
+      : 'ℹ️ Tidak ada data baru. Gunakan "Set Topic Name" untuk input manual.'
   );
 }

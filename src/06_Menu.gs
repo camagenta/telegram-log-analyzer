@@ -40,6 +40,14 @@ function onOpen() {
   mainMenu.addSubMenu(subAnalisa);
   mainMenu.addSeparator();
 
+  // Submenu: Topik Management
+  var subTopics = ui.createMenu('📌 Manajemen Topik');
+  subTopics.addItem('📋 Daftar Topik Tanpa Nama', 'manageTopicNames');
+  subTopics.addItem('🔧 Set Topic Name Manual', 'setTopicNameManually');
+  subTopics.addItem('🔄 Batch Resolve dari Cache', 'batchResolveTopicNames');
+  mainMenu.addSubMenu(subTopics);
+  mainMenu.addSeparator();
+
   // Submenu: Webhook
   var subWebhook = ui.createMenu('🔧 Manajemen Webhook');
   subWebhook.addItem('Set Webhook (Aktifkan)', 'setWebhook');
