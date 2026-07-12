@@ -554,6 +554,7 @@ function prepareTopicNameSheet() {
 
 /**
  * Step 2: Baca sheet _IsiNamaTopik, simpan nama, update log.
+ * Optimasi: baca data log sekali, update memory, tulis sekali.
  */
 function applyTopicNamesFromSheet() {
   var ss = getSS();
@@ -568,34 +569,26 @@ function applyTopicNamesFromSheet() {
     return;
   }
 
-  var data = sheet.getDataRange().getValues();
-  if (data.length < 2) {
+  // Baca isian dari sheet _IsiNamaTopik
+  var inputData = sheet.getDataRange().getValues();
+  if (inputData.length < 2) {
     ui.alert('Sheet kosong.');
     return;
   }
 
-  var applied = 0;
-  var errors = [];
-
-  for (var i = 1; i < data.length; i++) {
-    var row = data[i];
-    var topicId = row[1]; // Kolom B: Topic ID
-    var newName = row[4]; // Kolom E: Nama Baru
-
-    if (topicId && newName && newName.toString().trim() !== '') {
-      topicId = topicId.toString().trim();
-      newName = newName.toString().trim();
-
-      // Simpan ke PropertiesService
-      PropertiesService.getScriptProperties().setProperty('TOPIC_' + topicId, newName);
-
-      // Update sheet log
-      var updated = updateTopicNameInSheet_(topicId, newName);
-      applied++;
+  // Kumpulkan mapping Topic ID → Nama Baru
+  var nameMap = {};
+  for (var i = 1; i < inputData.length; i++) {
+    var row = inputData[i];
+    var topicId = row[1] ? row[1].toString().trim() : '';
+    var newName = row[4] ? row[4].toString().trim() : '';
+    if (topicId && newName) {
+      nameMap[topicId] = newName;
     }
   }
 
-  if (applied === 0) {
+  var topicIds = Object.keys(nameMap);
+  if (topicIds.length === 0) {
     ui.alert(
       'ℹ️ Tidak ada nama baru ditemukan.\n\n'
       + 'Isi kolom "✏️ Nama Baru" di sheet _IsiNamaTopik,\n'
@@ -604,34 +597,36 @@ function applyTopicNamesFromSheet() {
     return;
   }
 
-  ui.alert(
-    '✅ ' + applied + ' nama topik berhasil diterapkan!\n\n'
-    + 'Semua baris di log & report sudah terupdate.\n'
-    + 'Coba jalankan 📊 Analisa Bulanan untuk lihat hasilnya.'
-  );
-}
+  // Simpan ke PropertiesService (batch)
+  var props = PropertiesService.getScriptProperties();
+  topicIds.forEach(function (id) {
+    props.setProperty('TOPIC_' + id, nameMap[id]);
+  });
 
-/**
- * Update nama topik di semua baris sheet yang punya Topic ID tertentu.
- * @param {string} topicId
- * @param {string} newName
- * @return {number} Jumlah baris yang diupdate
- */
-function updateTopicNameInSheet_(topicId, newName) {
-  var sheet = getSheet();
-  var data = sheet.getDataRange().getValues();
+  // Update sheet log: baca SEKALI, update memory, tulis SEKALI
+  var logSheet = getSheet();
+  var logData = logSheet.getDataRange().getValues();
   var updatedCount = 0;
 
-  // Kolom Topic Name = index 15 (COL.TOPIC_NAME)
-  for (var i = 1; i < data.length; i++) { // mulai dari baris 2 (skip header)
-    var rowTopicId = data[i][COL.TOPIC_ID];
-    if (rowTopicId && rowTopicId.toString() === topicId) {
-      sheet.getRange(i + 1, COL.TOPIC_NAME + 1).setValue(newName);
-      updatedCount++;
+  for (var ri = 1; ri < logData.length; ri++) {
+    var tid = logData[ri][COL.TOPIC_ID];
+    if (tid) {
+      var key = tid.toString().trim();
+      if (nameMap[key]) {
+        logData[ri][COL.TOPIC_NAME] = nameMap[key];
+        updatedCount++;
+      }
     }
   }
 
-  return updatedCount;
+  // Tulis balik semua data log (sekali API call)
+  logSheet.getRange(1, 1, logData.length, logData[0].length).setValues(logData);
+
+  ui.alert(
+    '✅ ' + topicIds.length + ' nama topik diterapkan!\n'
+    + updatedCount + ' baris di log diupdate.\n\n'
+    + 'Coba jalankan 📊 Analisa Bulanan untuk lihat hasilnya.'
+  );
 }
 
 /**
