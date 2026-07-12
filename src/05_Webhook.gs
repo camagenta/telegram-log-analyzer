@@ -297,11 +297,11 @@ function parseForwardInfo_(msg) {
 }
 
 // ============================================================
-//  DIAGNOSTIC — Cek Grup & Topik
+//  DIAGNOSTIC — Cek Grup & Topik (output ke sheet baru)
 // ============================================================
 
 /**
- * Cek grup yang terhubung — tampilkan alert.
+ * Cek grup yang terhubung — output ke sheet baru.
  */
 function checkLinkedGroups() {
   var rows = getAllRows();
@@ -318,56 +318,116 @@ function checkLinkedGroups() {
     }
   });
 
-  var output = 'Daftar Grup yang Terhubung:\n\n';
-  var count = 0;
+  var groupList = [];
   for (var id in groups) {
     if (groups.hasOwnProperty(id)) {
-      output += (count + 1) + '. ' + groups[id] + ' (ID: ' + id + ')\n';
-      count++;
+      groupList.push({ id: id, title: groups[id] });
     }
   }
+  groupList.sort(function (a, b) { return a.title.localeCompare(b.title); });
+
+  // Output ke sheet baru
+  var sheet = createOrReplaceSheet_('_GrupTerhubung');
+  var row = 1;
+  sheet.getRange(row, 1, 1, 3)
+    .setValues([['No', 'Nama Grup', 'Chat ID']])
+    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white');
+  row++;
+  groupList.forEach(function (g, i) {
+    sheet.getRange(row, 1).setValue(i + 1).setHorizontalAlignment('center');
+    sheet.getRange(row, 2).setValue(g.title);
+    sheet.getRange(row, 3).setValue(g.id);
+    row++;
+  });
+  sheet.setColumnWidths(1, 1, 50);
+  sheet.setColumnWidths(2, 1, 300);
+  sheet.setColumnWidths(3, 1, 200);
+  getSS().setActiveSheet(sheet);
 
   SpreadsheetApp.getUi().alert(
-    count === 0 ? 'Belum ada data grup yang tercatat di log.' : output
+    '✅ Ditemukan ' + groupList.length + ' grup.\nDetail ada di sheet: _GrupTerhubung'
   );
 }
 
 /**
- * Scan topik/thread yang terdeteksi.
+ * Validasi apakah string adalah numeric topic ID valid.
+ * Topic ID dari Telegram selalu berupa angka positif.
+ */
+function isValidTopicId_(str) {
+  if (!str || str.toString().trim() === '') return false;
+  var s = str.toString().trim();
+  // Harus angka positif, tidak boleh mengandung titik, slash, atau karakter non-digit
+  return /^\d+$/.test(s) && s.length < 15;
+}
+
+/**
+ * Scan topik/thread — output ke sheet baru + alert ringkasan.
  */
 function scanLinkedTopics() {
   var rows = getAllRows();
   var topics = {};
 
   rows.forEach(function (row) {
-    var threadId = row[COL.TOPIC_ID];
+    var rawId = row[COL.TOPIC_ID];
     var threadName = row[COL.TOPIC_NAME];
     var groupName = row[COL.TITLE];
 
-    if (threadId && threadId.toString() !== '' && threadId.toString() !== '-') {
-      var key = threadId.toString();
-      if (!topics[key] || (topics[key].name === '-' && threadName !== '-' && threadName)) {
-        topics[key] = {
-          name: (threadName && threadName !== '-') ? threadName : 'Topik Tanpa Nama',
-          group: groupName
-        };
+    // Validasi: Topic ID harus numeric, bukan file ID / URL / metadata
+    if (!isValidTopicId_(rawId)) return;
+
+    var key = rawId.toString().trim();
+    if (!topics[key]) {
+      topics[key] = {
+        name: (threadName && threadName !== '-') ? threadName : 'Topik Tanpa Nama',
+        group: groupName || '-'
+      };
+    } else {
+      // Update name jika sebelumnya '-' dan sekarang ada
+      if (topics[key].name === 'Topik Tanpa Nama' && threadName && threadName !== '-') {
+        topics[key].name = threadName;
       }
     }
   });
 
-  var output = 'Daftar Topik/Thread yang Terdeteksi:\n\n';
-  var count = 0;
-  for (var id in topics) {
-    if (topics.hasOwnProperty(id)) {
-      output += (count + 1) + '. ' + topics[id].name + ' (ID: ' + id + ')\n   Grup: ' + topics[id].group + '\n';
-      count++;
-    }
-  }
+  // Output ke sheet baru
+  var sheet = createOrReplaceSheet_('_ScanTopik');
+  var row = 1;
+  sheet.getRange(row, 1, 1, 4)
+    .setValues([['No', 'Nama Topik', 'Topic ID', 'Grup']])
+    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white');
+  row++;
+
+  var sortedIds = Object.keys(topics).sort(function (a, b) {
+    return parseInt(a) - parseInt(b);
+  });
+
+  var countNamed = 0;
+  var countUnnamed = 0;
+
+  sortedIds.forEach(function (id) {
+    var t = topics[id];
+    sheet.getRange(row, 1).setValue(row - 1).setHorizontalAlignment('center');
+    sheet.getRange(row, 2).setValue(t.name);
+    sheet.getRange(row, 3).setValue(id);
+    sheet.getRange(row, 4).setValue(t.group);
+    if (t.name === 'Topik Tanpa Nama') countUnnamed++;
+    else countNamed++;
+    row++;
+  });
+
+  sheet.setColumnWidths(1, 1, 50);
+  sheet.setColumnWidths(2, 1, 300);
+  sheet.setColumnWidths(3, 1, 100);
+  sheet.setColumnWidths(4, 1, 300);
+  getSS().setActiveSheet(sheet);
 
   SpreadsheetApp.getUi().alert(
-    count === 0
-      ? 'Belum ada data topik yang terdeteksi. Pastikan kolom Topic ID sudah terisi.'
-      : output
+    '✅ Scan selesai!\n'
+    + 'Total topik: ' + (countNamed + countUnnamed) + '\n'
+    + '✓ Bernama: ' + countNamed + '\n'
+    + '✗ Tanpa Nama: ' + countUnnamed + '\n\n'
+    + 'Detail ada di sheet: _ScanTopik\n'
+    + 'Gunakan 📌 Manajemen Topik > Set Topic Name untuk isi yang kosong.'
   );
 }
 
