@@ -2,6 +2,7 @@
  * ============================================================
  *  00_CONFIG.gs — Konfigurasi Aplikasi
  * ============================================================
+ *  Version: 1.0.0 (Test GitHub Actions auto-deploy)
  *  Semua token & ID disimpan di PropertiesService (AMAN).
  *  Jalankan setupConfig() sekali saja dari menu untuk mengisi.
  *  
