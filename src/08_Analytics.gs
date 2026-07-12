@@ -1,0 +1,743 @@
+/**
+ * ============================================================
+ *  08_ANALYTICS.gs — Analisa Bulanan (8 Fitur)
+ * ============================================================
+ *  Fitur:
+ *    1. Rekap per Grup / User / Tipe Chat
+ *    2. Ranking Aktivitas User (Top 30)
+ *    3. Distribusi Tipe Pesan + Persentase
+ *    4. Aktivitas Harian (tren + rata-rata + hari tersibuk)
+ *    5. Rekap Topik Forum
+ *    6. Rekap File Tersimpan (jumlah + ukuran)
+ *    7. Bandingan Month-over-Month
+ *    8. Export ke Sheet Baru + Kirim Telegram
+ * ============================================================
+ *  Dependensi: Config, Utils, Sheet, Telegram
+ * ============================================================
+ */
+
+// ============================================================
+//  ENTRY POINT
+// ============================================================
+
+/**
+ * Generate report — dipanggil dari HTML picker atau menu.
+ * @param {number} year
+ * @param {number} month
+ * @return {string} JSON { success, sheetName, totalMessages, ... }
+ */
+function generateMonthlyReport(year, month) {
+  try {
+    assertConfig();
+
+    if (!year || !month) {
+      return JSON.stringify({ success: false, error: 'Tahun dan bulan harus diisi.' });
+    }
+
+    var monthNum = parseInt(month);
+    var yearNum = parseInt(year);
+    if (monthNum < 1 || monthNum > 12) {
+      return JSON.stringify({ success: false, error: 'Bulan tidak valid (1-12).' });
+    }
+    if (yearNum < 2020 || yearNum > 2099) {
+      return JSON.stringify({ success: false, error: 'Tahun tidak valid.' });
+    }
+
+    var allRows = getAllRows();
+    if (allRows.length === 0) {
+      return JSON.stringify({ success: false, error: 'Sheet utama masih kosong.' });
+    }
+
+    var filtered = filterByMonth_(allRows, yearNum, monthNum);
+    if (filtered.length === 0) {
+      return JSON.stringify({
+        success: false,
+        error: 'Tidak ada data untuk ' + getMonthName_(monthNum) + ' ' + yearNum + '.'
+      });
+    }
+
+    // Build full report
+    var report = buildFullReport_(filtered, allRows, yearNum, monthNum);
+
+    // Export ke sheet baru
+    var sheetName = exportToSheet_(report);
+
+    // Format untuk Telegram
+    var telegramText = formatReportForTelegram_(report);
+
+    var topUser = report.ranking.length > 0 ? report.ranking[0] : null;
+
+    return JSON.stringify({
+      success: true,
+      sheetName: sheetName,
+      totalMessages: filtered.length,
+      summary: {
+        groups: Object.keys(report.perGroup).length,
+        users: Object.keys(report.perUser).length,
+        types: report.distribusi.length,
+        topUser: topUser ? topUser.name : '-',
+        topUserCount: topUser ? topUser.count : 0
+      },
+      telegramText: telegramText
+    });
+
+  } catch (e) {
+    console.error('generateMonthlyReport error:', e.toString());
+    return JSON.stringify({ success: false, error: e.toString() });
+  }
+}
+
+/**
+ * Build full report object — reusable.
+ */
+function buildFullReport_(filtered, allRows, year, month) {
+  return {
+    period: { year: year, month: month },
+    totalMessages: filtered.length,
+    perGroup: buildRekapPerGroup_(filtered),
+    perUser: buildRekapPerUser_(filtered),
+    perType: buildRekapPerType_(filtered),
+    ranking: buildRankingAktivitas_(filtered),
+    distribusi: buildDistribusiTipe_(filtered),
+    daily: buildAktivitasHarian_(filtered),
+    topik: buildRekapTopik_(filtered),
+    fileRecap: buildRekapFile_(filtered),
+    comparison: buildMonthComparison_(allRows, year, month)
+  };
+}
+
+/**
+ * Kirim laporan via Telegram — dipanggil dari menu.
+ * Tanya dulu mau kirim ke Chat ID mana.
+ */
+function sendMonthlyReportToTelegram() {
+  try {
+    assertConfig();
+
+    var available = getAvailableMonths();
+    if (available.length === 0) {
+      SpreadsheetApp.getUi().alert('Belum ada data.');
+      return;
+    }
+
+    var latest = available[0];
+    var allRows = getAllRows();
+    var filtered = filterByMonth_(allRows, latest.year, latest.month);
+
+    if (filtered.length === 0) {
+      SpreadsheetApp.getUi().alert('Tidak ada data untuk ' + getMonthName_(latest.month) + ' ' + latest.year);
+      return;
+    }
+
+    var report = buildFullReport_(filtered, allRows, latest.year, latest.month);
+    var text = formatReportForTelegram_(report);
+
+    if (text.length > 4000) {
+      text = text.substring(0, 3900) + '\n\n... _(laporan dipotong, lihat sheet lengkap)_';
+    }
+
+    // Minta Chat ID tujuan
+    var targetId = Browser.inputBox(
+      '📤 Kirim ke Telegram',
+      'Masukkan Chat ID tujuan (bisa ID grup atau user):\n' +
+      '(Kosongkan untuk kirim ke SEMUA grup yang terdeteksi)',
+      Browser.Buttons.OK_CANCEL
+    );
+    if (targetId === 'cancel') return;
+
+    if (targetId && targetId.trim() !== '') {
+      sendText(targetId.trim(), text);
+      Browser.msgBox('✅ Laporan dikirim ke ' + targetId.trim());
+    } else {
+      // Kirim ke semua grup
+      var chatIds = extractGroupChatIds_(allRows);
+      var sent = 0;
+      chatIds.forEach(function (id) {
+        try {
+          sendText(id, text);
+          sent++;
+        } catch (e) {
+          console.error('Gagal kirim ke', id, e.toString());
+        }
+      });
+      Browser.msgBox('✅ Laporan dikirim ke ' + sent + ' grup.');
+    }
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('❌ Error: ' + e.toString());
+  }
+}
+
+// ============================================================
+//  FUNGSI ANALISA INTI
+// ============================================================
+
+/**
+ * 1a. Rekap per Grup — kolom TITLE.
+ */
+function buildRekapPerGroup_(rows) {
+  var groups = {};
+  rows.forEach(function (row) {
+    var name = row[COL.TITLE] || '(Tanpa Grup)';
+    groups[name] = (groups[name] || 0) + 1;
+  });
+  return sortObjectDesc_(groups);
+}
+
+/**
+ * 1b. Rekap per User — kolom SENDER.
+ */
+function buildRekapPerUser_(rows) {
+  var users = {};
+  rows.forEach(function (row) {
+    var name = row[COL.SENDER] || '(Tanpa Nama)';
+    users[name] = (users[name] || 0) + 1;
+  });
+  return sortObjectDesc_(users);
+}
+
+/**
+ * 1c. Rekap per Tipe Chat — kolom TYPE (private/group/supergroup).
+ */
+function buildRekapPerType_(rows) {
+  var types = {};
+  rows.forEach(function (row) {
+    var t = row[COL.TYPE] || 'unknown';
+    types[t] = (types[t] || 0) + 1;
+  });
+  return sortObjectDesc_(types);
+}
+
+/**
+ * 2. Ranking Aktivitas User — Top 30.
+ */
+function buildRankingAktivitas_(rows) {
+  var users = {};
+  rows.forEach(function (row) {
+    var name = row[COL.SENDER] || '(Tanpa Nama)';
+    users[name] = (users[name] || 0) + 1;
+  });
+
+  var sorted = [];
+  for (var name in users) {
+    if (users.hasOwnProperty(name)) {
+      sorted.push({ name: name, count: users[name] });
+    }
+  }
+  sorted.sort(function (a, b) { return b.count - a.count; });
+  return sorted.slice(0, 30);
+}
+
+/**
+ * 3. Distribusi Tipe Pesan — kolom MSG_TYPE.
+ */
+function buildDistribusiTipe_(rows) {
+  var types = {};
+  var total = rows.length;
+
+  rows.forEach(function (row) {
+    var tipe = row[COL.MSG_TYPE] || 'Unknown';
+    // Normalisasi Document(filename) → Document
+    if (tipe.indexOf('Document (') === 0) tipe = 'Document';
+    types[tipe] = (types[tipe] || 0) + 1;
+  });
+
+  var result = [];
+  for (var tipe in types) {
+    if (types.hasOwnProperty(tipe)) {
+      result.push({
+        type: tipe,
+        count: types[tipe],
+        percentage: ((types[tipe] / total) * 100).toFixed(1)
+      });
+    }
+  }
+  result.sort(function (a, b) { return b.count - a.count; });
+  return result;
+}
+
+/**
+ * 4. Aktivitas Harian — group by tanggal.
+ */
+function buildAktivitasHarian_(rows) {
+  var days = {};
+
+  rows.forEach(function (row) {
+    var ts = row[COL.TIMESTAMP];
+    var d = (ts instanceof Date) ? ts : new Date(ts);
+    if (isNaN(d.getTime())) return;
+
+    var dateStr = formatDate_(d, 'yyyy-MM-dd');
+    days[dateStr] = (days[dateStr] || 0) + 1;
+  });
+
+  var result = [];
+  for (var dateStr in days) {
+    if (days.hasOwnProperty(dateStr)) {
+      result.push({ date: dateStr, count: days[dateStr] });
+    }
+  }
+  result.sort(function (a, b) { return a.date.localeCompare(b.date); });
+
+  var totalDays = result.length;
+  var totalMsg = rows.length;
+
+  var maxDay = result.length > 0
+    ? result.reduce(function (a, b) { return a.count > b.count ? a : b; })
+    : { date: '-', count: 0 };
+
+  return {
+    daily: result,
+    totalDays: totalDays,
+    avgPerDay: totalDays > 0 ? (totalMsg / totalDays).toFixed(1) : '0',
+    maxDay: maxDay
+  };
+}
+
+/**
+ * 5. Rekap Topik Forum — kolom TOPIC_ID & TOPIC_NAME.
+ * Hanya untuk pesan dari grup bertopik.
+ */
+function buildRekapTopik_(rows) {
+  var topics = {};
+
+  rows.forEach(function (row) {
+    var topicId = row[COL.TOPIC_ID];
+    var topicName = row[COL.TOPIC_NAME] || '-';
+    var chatTitle = row[COL.TITLE] || '';
+
+    if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
+      var key = topicId.toString();
+      if (!topics[key]) {
+        topics[key] = {
+          name: (topicName && topicName !== '-') ? topicName : 'Topik #' + key,
+          group: chatTitle,
+          count: 0
+        };
+      }
+      topics[key].count++;
+    }
+  });
+
+  var result = [];
+  for (var id in topics) {
+    if (topics.hasOwnProperty(id)) {
+      result.push(topics[id]);
+    }
+  }
+  result.sort(function (a, b) { return b.count - a.count; });
+  return result;
+}
+
+/**
+ * 6. Rekap File Tersimpan — kolom GDRIVE_LINK, MSG_TYPE, METADATA.
+ */
+function buildRekapFile_(rows) {
+  var byType = {};
+  var totalSizeBytes = 0;
+  var fileCount = 0;
+
+  rows.forEach(function (row) {
+    var gdriveLink = row[COL.GDRIVE_LINK];
+    var tipePesan = row[COL.MSG_TYPE] || '';
+    var metadata = row[COL.METADATA] || '';
+
+    if (gdriveLink && gdriveLink.toString() !== '' && gdriveLink.toString() !== '-') {
+      fileCount++;
+      var type = (tipePesan.indexOf('Document (') === 0) ? 'Document' : tipePesan;
+      byType[type] = (byType[type] || 0) + 1;
+      totalSizeBytes += parseSizeFromMetadata_(metadata) * 1024;
+    }
+  });
+
+  var breakdown = [];
+  for (var t in byType) {
+    if (byType.hasOwnProperty(t)) {
+      breakdown.push({
+        type: t,
+        count: byType[t],
+        percentage: fileCount > 0 ? ((byType[t] / fileCount) * 100).toFixed(1) : '0'
+      });
+    }
+  }
+  breakdown.sort(function (a, b) { return b.count - a.count; });
+
+  return {
+    totalFiles: fileCount,
+    totalSizeMB: totalSizeBytes / (1024 * 1024),
+    breakdown: breakdown
+  };
+}
+
+/**
+ * 7. Bandingan Month-over-Month.
+ */
+function buildMonthComparison_(allRows, year, month) {
+  var prevMonth = month - 1;
+  var prevYear = year;
+  if (prevMonth === 0) {
+    prevMonth = 12;
+    prevYear = year - 1;
+  }
+
+  var currentData = filterByMonth_(allRows, year, month);
+  var prevData = filterByMonth_(allRows, prevYear, prevMonth);
+
+  if (prevData.length === 0) {
+    return {
+      hasPrevData: false,
+      currentTotal: currentData.length,
+      prevTotal: 0,
+      message: 'Tidak ada data bulan sebelumnya untuk perbandingan.'
+    };
+  }
+
+  var diff = currentData.length - prevData.length;
+  var percentChange = ((diff / prevData.length) * 100).toFixed(1);
+
+  // Perbandingan per grup
+  var currentGroups = buildRekapPerGroup_(currentData);
+  var prevGroups = buildRekapPerGroup_(prevData);
+
+  var groupMap = {};
+  currentGroups.forEach(function (g) { groupMap[g.name] = { current: g.count, previous: 0 }; });
+  prevGroups.forEach(function (g) {
+    if (groupMap[g.name]) groupMap[g.name].previous = g.count;
+    else groupMap[g.name] = { current: 0, previous: g.count };
+  });
+
+  var groupComparison = [];
+  for (var name in groupMap) {
+    if (groupMap.hasOwnProperty(name)) {
+      var c = groupMap[name].current;
+      var p = groupMap[name].previous;
+      var gDiff = c - p;
+      var gPct = p > 0 ? ((gDiff / p) * 100).toFixed(1) : '+∞';
+      groupComparison.push({
+        group: name,
+        current: c,
+        previous: p,
+        diff: gDiff,
+        percent: gPct
+      });
+    }
+  }
+  groupComparison.sort(function (a, b) { return Math.abs(b.diff) - Math.abs(a.diff); });
+
+  return {
+    hasPrevData: true,
+    currentTotal: currentData.length,
+    prevTotal: prevData.length,
+    diff: diff,
+    percentChange: percentChange,
+    direction: diff >= 0 ? 'naik' : 'turun',
+    groupComparison: groupComparison.slice(0, 10)
+  };
+}
+
+// ============================================================
+//  EXPORT KE SHEET BARU
+// ============================================================
+
+function exportToSheet_(report) {
+  var p = report.period;
+  var monthName = getMonthName_(p.month);
+  var sheetName = 'Rekap_' + p.year + '_' + padZero_(p.month);
+
+  var newSheet = createOrReplaceSheet_(sheetName);
+  var row = 1;
+
+  // --- HEADER UTAMA ---
+  newSheet.getRange(row, 1)
+    .setValue('📊 REKAP BULANAN: ' + monthName + ' ' + p.year)
+    .setFontWeight('bold').setFontSize(14);
+  newSheet.getRange(row, 2)
+    .setValue('Total Pesan: ' + report.totalMessages)
+    .setFontWeight('bold').setFontSize(12);
+  row = 2;
+  newSheet.getRange(row, 1)
+    .setValue('Generated: ' + formatDate_(now_(), 'dd/MM/yyyy HH:mm:ss'))
+    .setFontStyle('italic').setFontColor('#666');
+  row = 4;
+
+  // Style helper
+  function writeHeaderRow(r, values) {
+    var range = newSheet.getRange(r, 1, 1, values.length);
+    range.setValues([values]);
+    range.setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
+      .setHorizontalAlignment('center');
+  }
+
+  function writeSection(r, title) {
+    newSheet.getRange(r, 1).setValue(title).setFontWeight('bold').setFontSize(12);
+    return r + 1;
+  }
+
+  // =========================================
+  //  1. REKAP PER GRUP
+  // =========================================
+  row = writeSection(row, '1️⃣ REKAP PER GRUP');
+  writeHeaderRow(row, ['Nama Grup', 'Jumlah Pesan']);
+  row++;
+  report.perGroup.forEach(function (item) {
+    newSheet.getRange(row, 1).setValue(item.name);
+    newSheet.getRange(row, 2).setValue(item.count).setHorizontalAlignment('center');
+    row++;
+  });
+  row += 2;
+
+  // =========================================
+  //  2. REKAP PER USER (Top 20)
+  // =========================================
+  row = writeSection(row, '2️⃣ REKAP PER USER (Top 20)');
+  writeHeaderRow(row, ['Nama Pengirim', 'Jumlah Pesan']);
+  row++;
+  report.perUser.slice(0, 20).forEach(function (item) {
+    newSheet.getRange(row, 1).setValue(item.name);
+    newSheet.getRange(row, 2).setValue(item.count).setHorizontalAlignment('center');
+    row++;
+  });
+  row += 2;
+
+  // =========================================
+  //  3. DISTRIBUSI TIPE PESAN
+  // =========================================
+  row = writeSection(row, '3️⃣ DISTRIBUSI TIPE PESAN');
+  writeHeaderRow(row, ['Tipe Pesan', 'Jumlah', 'Persentase']);
+  row++;
+  report.distribusi.forEach(function (item) {
+    newSheet.getRange(row, 1).setValue(item.type);
+    newSheet.getRange(row, 2).setValue(item.count).setHorizontalAlignment('center');
+    newSheet.getRange(row, 3).setValue(item.percentage + '%').setHorizontalAlignment('center');
+    row++;
+  });
+  row += 2;
+
+  // =========================================
+  //  4. RANKING AKTIVITAS (Top 10)
+  // =========================================
+  row = writeSection(row, '4️⃣ RANKING AKTIVITAS USER (Top 10)');
+  writeHeaderRow(row, ['Peringkat', 'Nama', 'Jumlah Pesan']);
+  row++;
+  report.ranking.slice(0, 10).forEach(function (item, idx) {
+    newSheet.getRange(row, 1).setValue(idx + 1).setHorizontalAlignment('center');
+    newSheet.getRange(row, 2).setValue(item.name);
+    newSheet.getRange(row, 3).setValue(item.count).setHorizontalAlignment('center');
+    row++;
+  });
+  row += 2;
+
+  // =========================================
+  //  5. AKTIVITAS HARIAN
+  // =========================================
+  row = writeSection(row, '5️⃣ AKTIVITAS HARIAN');
+  newSheet.getRange(row, 1)
+    .setValue('Total Hari: ' + report.daily.totalDays + ' hari')
+    .setFontStyle('italic');
+  newSheet.getRange(row, 2)
+    .setValue('Rata-rata: ' + report.daily.avgPerDay + ' pesan/hari')
+    .setFontStyle('italic');
+  newSheet.getRange(row, 3)
+    .setValue('Hari Tersibuk: ' + report.daily.maxDay.date + ' (' + report.daily.maxDay.count + ' pesan)')
+    .setFontStyle('italic');
+  row++;
+  writeHeaderRow(row, ['Tanggal', 'Jumlah Pesan']);
+  row++;
+  report.daily.daily.forEach(function (item) {
+    newSheet.getRange(row, 1).setValue(item.date).setHorizontalAlignment('center');
+    newSheet.getRange(row, 2).setValue(item.count).setHorizontalAlignment('center');
+    row++;
+  });
+  row += 2;
+
+  // =========================================
+  //  6. REKAP TOPIK FORUM
+  // =========================================
+  row = writeSection(row, '6️⃣ REKAP TOPIK FORUM');
+  if (report.topik.length > 0) {
+    writeHeaderRow(row, ['Nama Topik', 'Grup', 'Jumlah Pesan']);
+    row++;
+    report.topik.forEach(function (item) {
+      newSheet.getRange(row, 1).setValue(item.name);
+      newSheet.getRange(row, 2).setValue(item.group);
+      newSheet.getRange(row, 3).setValue(item.count).setHorizontalAlignment('center');
+      row++;
+    });
+  } else {
+    newSheet.getRange(row, 1)
+      .setValue('Tidak ada data topik/forum untuk periode ini.')
+      .setFontStyle('italic').setFontColor('#666');
+    row++;
+  }
+  row += 2;
+
+  // =========================================
+  //  7. REKAP FILE TERSIMPAN
+  // =========================================
+  row = writeSection(row, '7️⃣ REKAP FILE TERSIMPAN');
+  if (report.fileRecap.totalFiles > 0) {
+    newSheet.getRange(row, 1)
+      .setValue('Total File: ' + report.fileRecap.totalFiles + ' file')
+      .setFontWeight('bold');
+    newSheet.getRange(row, 2)
+      .setValue('Total Ukuran: ' + report.fileRecap.totalSizeMB.toFixed(2) + ' MB')
+      .setFontWeight('bold');
+    row++;
+    writeHeaderRow(row, ['Tipe File', 'Jumlah', 'Persentase']);
+    row++;
+    report.fileRecap.breakdown.forEach(function (item) {
+      newSheet.getRange(row, 1).setValue(item.type);
+      newSheet.getRange(row, 2).setValue(item.count).setHorizontalAlignment('center');
+      newSheet.getRange(row, 3).setValue(item.percentage + '%').setHorizontalAlignment('center');
+      row++;
+    });
+  } else {
+    newSheet.getRange(row, 1)
+      .setValue('Tidak ada file tersimpan untuk periode ini.')
+      .setFontStyle('italic').setFontColor('#666');
+    row++;
+  }
+  row += 2;
+
+  // =========================================
+  //  8. BANDINGAN MONTH-OVER-MONTH
+  // =========================================
+  row = writeSection(row, '8️⃣ BANDINGAN MONTH-OVER-MONTH');
+  if (report.comparison.hasPrevData) {
+    var prevMonth = report.period.month - 1;
+    var prevYear = report.period.year;
+    if (prevMonth === 0) { prevMonth = 12; prevYear--; }
+    var prevLabel = getMonthName_(prevMonth) + ' ' + prevYear;
+
+    newSheet.getRange(row, 1).setValue('Bulan Ini: ' + report.comparison.currentTotal + ' pesan');
+    newSheet.getRange(row, 2).setValue('Bulan Lalu (' + prevLabel + '): ' + report.comparison.prevTotal + ' pesan');
+    row++;
+    var diffText = (report.comparison.diff >= 0 ? '+' : '') + report.comparison.diff;
+    var directionEmoji = report.comparison.diff >= 0 ? '📈' : '📉';
+    newSheet.getRange(row, 1)
+      .setValue(directionEmoji + ' Perubahan: ' + diffText + ' pesan (' + report.comparison.percentChange + '%)')
+      .setFontWeight('bold');
+    row++;
+
+    if (report.comparison.groupComparison.length > 0) {
+      row++;
+      newSheet.getRange(row, 1).setValue('Perbandingan per Grup:').setFontWeight('bold');
+      row++;
+      writeHeaderRow(row, ['Grup', 'Bulan Ini', 'Bulan Lalu', 'Selisih', 'Perubahan']);
+      row++;
+      report.comparison.groupComparison.forEach(function (item) {
+        newSheet.getRange(row, 1).setValue(item.group);
+        newSheet.getRange(row, 2).setValue(item.current).setHorizontalAlignment('center');
+        newSheet.getRange(row, 3).setValue(item.previous).setHorizontalAlignment('center');
+        newSheet.getRange(row, 4)
+          .setValue((item.diff >= 0 ? '+' : '') + item.diff).setHorizontalAlignment('center');
+        newSheet.getRange(row, 5)
+          .setValue(typeof item.percent === 'string' ? item.percent : item.percent + '%')
+          .setHorizontalAlignment('center');
+        row++;
+      });
+    }
+  } else {
+    newSheet.getRange(row, 1)
+      .setValue(report.comparison.message || 'Tidak ada data bulan sebelumnya.')
+      .setFontStyle('italic').setFontColor('#666');
+    row++;
+  }
+
+  // --- Set lebar kolom ---
+  newSheet.setColumnWidths(1, 1, 220);
+  newSheet.setColumnWidths(2, 1, 160);
+  newSheet.setColumnWidths(3, 1, 130);
+  newSheet.setColumnWidths(4, 1, 130);
+  newSheet.setColumnWidths(5, 1, 130);
+
+  // Aktifkan sheet baru
+  getSS().setActiveSheet(newSheet);
+
+  return sheetName;
+}
+
+// ============================================================
+//  FORMAT LAPORAN UNTUK TELEGRAM
+// ============================================================
+
+/**
+ * Format laporan singkat untuk dikirim via Telegram (Markdown).
+ */
+function formatReportForTelegram_(report) {
+  var p = report.period;
+  var monthName = getMonthName_(p.month);
+  var lb = '\n';
+
+  var text = '';
+  text += '📊 *REKAP BULANAN* ' + monthName + ' ' + p.year + lb;
+  text += '━━━━━━━━━━━━━━━━━━━' + lb;
+  text += '📝 *Total Pesan:* ' + report.totalMessages + lb + lb;
+
+  // 1. Grup
+  text += '━ *1. REKAP PER GRUP*' + lb;
+  report.perGroup.slice(0, 5).forEach(function (g) {
+    text += '  ▫ ' + g.name + ': *' + g.count + '* pesan' + lb;
+  });
+  if (report.perGroup.length > 5) {
+    text += '  ...dan ' + (report.perGroup.length - 5) + ' grup lainnya' + lb;
+  }
+  text += lb;
+
+  // 2. Distribusi Tipe
+  text += '━ *2. TIPE PESAN*' + lb;
+  report.distribusi.forEach(function (t) {
+    text += '  ▫ ' + t.type + ': *' + t.count + '* (' + t.percentage + '%)' + lb;
+  });
+  text += lb;
+
+  // 3. Top 5 User
+  text += '━ *3. TOP 5 USER*' + lb;
+  report.ranking.slice(0, 5).forEach(function (u, i) {
+    text += '  ' + (i + 1) + '. ' + u.name + ': *' + u.count + '* pesan' + lb;
+  });
+  text += lb;
+
+  // 4. Harian
+  text += '━ *4. AKTIVITAS HARIAN*' + lb;
+  text += '  ▫ Total hari: *' + report.daily.totalDays + '* hari' + lb;
+  text += '  ▫ Rata-rata: *' + report.daily.avgPerDay + '* pesan/hari' + lb;
+  text += '  ▫ Tersibuk: ' + report.daily.maxDay.date + ' (*' + report.daily.maxDay.count + '* pesan)' + lb;
+  text += lb;
+
+  // 5. File
+  if (report.fileRecap.totalFiles > 0) {
+    text += '━ *5. FILE TERSIMPAN*' + lb;
+    text += '  ▫ Total: *' + report.fileRecap.totalFiles + '* file' + lb;
+    text += '  ▫ Ukuran: *' + report.fileRecap.totalSizeMB.toFixed(1) + '* MB' + lb;
+    text += lb;
+  }
+
+  // 6. MoM
+  if (report.comparison.hasPrevData) {
+    text += '━ *6. BANDINGAN BULAN LALU*' + lb;
+    text += '  ▫ Sebelumnya: *' + report.comparison.prevTotal + '* pesan' + lb;
+    var arrow = report.comparison.diff >= 0 ? '📈' : '📉';
+    text += '  ▫ ' + arrow + ' *' + (report.comparison.diff >= 0 ? '+' : '') + report.comparison.diff
+      + '* (' + report.comparison.percentChange + '%)' + lb;
+  } else {
+    text += '━ *6. BANDINGAN*' + lb;
+    text += '  ▫ Belum ada data bulan sebelumnya.' + lb;
+  }
+
+  return text;
+}
+
+/**
+ * Ekstrak daftar Chat ID grup dari data.
+ */
+function extractGroupChatIds_(rows) {
+  var ids = {};
+  rows.forEach(function (row) {
+    var chatId = row[COL.CHAT_ID];
+    var tipe = row[COL.TYPE];
+    if (chatId && (tipe === 'group' || tipe === 'supergroup')) {
+      ids[chatId.toString()] = true;
+    }
+  });
+  return Object.keys(ids);
+}

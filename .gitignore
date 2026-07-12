@@ -1,0 +1,32 @@
+# Google Apps Script (clasp)
+.clasp.json
+.clasprc.json
+.clasprc*.json
+
+# Node.js (if using clasp locally)
+node_modules/
+npm-debug.log*
+package-lock.json
+package.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Secrets and config (token should be in PropertiesService, not in files)
+.env
+*.env.local
+credentials.json
+token.json
+
+# Codex / OpenCode
+.omo/
+.codegraph/
