@@ -191,7 +191,7 @@ function resolveTopicName_(chatId, topicId, msg) {
 }
 
 /**
- * Dapatkan daftar topik yang belum terresolve namanya.
+ * Dapatkan daftar topik yang belum terresolve namanya (versi cepat).
  * Scan semua baris di sheet, cari Topic ID unik dengan nama '-'.
  * @return {Array<{chatId: string, topicId: string, groupName: string}>}
  */
@@ -200,7 +200,10 @@ function getUnresolvedTopics_() {
   var unresolved = {};
   var resolved = {};
 
-  // Kumpulin semua topik beserta statusnya
+  // Batch load semua PropertiesService keys sekaligus
+  var props = PropertiesService.getScriptProperties();
+  var allProps = props.getProperties();
+
   rows.forEach(function (row) {
     var topicId = row[COL.TOPIC_ID];
     var topicName = row[COL.TOPIC_NAME];
@@ -209,9 +212,7 @@ function getUnresolvedTopics_() {
 
     if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
       var key = topicId.toString().trim();
-
-      // Cek apakah nama sudah di-set di PropertiesService
-      var savedName = PropertiesService.getScriptProperties().getProperty('TOPIC_' + key);
+      var savedName = allProps['TOPIC_' + key];
 
       if (savedName && savedName !== '-') {
         resolved[key] = { name: savedName };
@@ -220,8 +221,7 @@ function getUnresolvedTopics_() {
           unresolved[key] = {
             chatId: chatId,
             topicId: key,
-            groupName: groupName,
-            exampleName: '' // akan diisi dari baris lain
+            groupName: groupName
           };
         }
       } else {
@@ -446,64 +446,75 @@ function scanLinkedTopics() {
  */
 
 /**
- * Step 1: Buat sheet dengan daftar topik tanpa nama + kolom isian
- * + contoh pesan dari setiap topik biar bisa dikenali.
+ * Step 1: Buat sheet isian nama topik (batch — cepat).
+ * Optimasi: sekali baca data, sekali tulis data, minim API call.
  */
 function prepareTopicNameSheet() {
   var unresolved = getUnresolvedTopics_();
   var ui = SpreadsheetApp.getUi();
-  var data = getAllRows();
+  var n = unresolved.length;
 
-  // Kumpulkan 2 contoh pesan per topic ID untuk referensi
-  var sampleByTopic = {};
-  data.forEach(function (row) {
-    var tid = row[COL.TOPIC_ID];
-    if (tid && tid.toString().trim() !== '' && tid.toString().trim() !== '-') {
-      var key = tid.toString().trim();
-      if (!sampleByTopic[key]) sampleByTopic[key] = [];
-      if (sampleByTopic[key].length < 2) {
-        var txt = row[COL.TEXT] || '';
-        if (txt.length > 80) txt = txt.substring(0, 80) + '…';
-        var date = (row[COL.TIMESTAMP] instanceof Date)
-          ? formatDate_(row[COL.TIMESTAMP], 'dd/MM')
-          : '';
-        sampleByTopic[key].push(date + ' ' + txt);
-      }
-    }
-  });
-
-  var sheet = createOrReplaceSheet_('_IsiNamaTopik');
-
-  // Header
-  var headers = ['No', 'Topic ID', 'Nama Saat Ini', 'Grup', '✏️ Nama Baru (isi di sini)', '📄 Contoh Pesan'];
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  sheet.getRange(1, 1, 1, headers.length)
-    .setFontWeight('bold').setBackground('#4a86e8').setFontColor('white')
-    .setHorizontalAlignment('center');
-
-  // Isi data
-  if (unresolved.length === 0) {
-    sheet.getRange(2, 1).setValue('✅ Semua topik sudah punya nama!');
-    sheet.getRange(2, 2).setValue('Tidak ada data');
-    getSS().setActiveSheet(sheet);
+  if (n === 0) {
     ui.alert('✅ Semua topik sudah punya nama!');
     return;
   }
 
-  unresolved.forEach(function (t, i) {
-    var r = i + 2;
-    sheet.getRange(r, 1).setValue(i + 1).setHorizontalAlignment('center');
-    sheet.getRange(r, 2).setValue(t.topicId).setHorizontalAlignment('center');
-    sheet.getRange(r, 3).setValue('Topik Tanpa Nama');
-    sheet.getRange(r, 4).setValue(t.groupName || '-');
-    sheet.getRange(r, 5).setValue(''); // kosong, diisi user
+  // 1. Kumpulkan 2 contoh pesan per topic ID (dalam memory — cepat)
+  var data = getAllRows();
+  var sampleByTopic = {};
+  for (var di = 0; di < data.length; di++) {
+    var row = data[di];
+    var tid = row[COL.TOPIC_ID];
+    if (tid && tid.toString().trim() !== '' && tid.toString().trim() !== '-') {
+      var key = tid.toString().trim();
+      if (sampleByTopic[key] && sampleByTopic[key].length >= 2) continue;
+      if (!sampleByTopic[key]) sampleByTopic[key] = [];
+      var txt = row[COL.TEXT] || '';
+      if (txt.length > 80) txt = txt.substring(0, 80) + '…';
+      var date = (row[COL.TIMESTAMP] instanceof Date)
+        ? formatDate_(row[COL.TIMESTAMP], 'dd/MM')
+        : '';
+      sampleByTopic[key].push(date + ' ' + txt);
+    }
+  }
 
-    // Sample messages
+  // 2. Buat sheet baru
+  var sheet = createOrReplaceSheet_('_IsiNamaTopik');
+
+  // 3. Batch tulis HEADER + DATA (sekali API call)
+  var numCols = 6;
+  var output = [];
+  // Header
+  output.push(['No', 'Topic ID', 'Nama Saat Ini', 'Grup',
+    '✏️ Nama Baru (isi di sini)', '📄 Contoh Pesan']);
+
+  // Data rows
+  for (var i = 0; i < n; i++) {
+    var t = unresolved[i];
     var samples = sampleByTopic[t.topicId] || [];
-    sheet.getRange(r, 6).setValue(samples.length > 0 ? samples.join('\n') : '(tidak ada contoh)');
-  });
+    output.push([
+      i + 1,
+      t.topicId,
+      'Topik Tanpa Nama',
+      t.groupName || '-',
+      '', // Nama Baru — kosong, diisi user
+      samples.length > 0 ? samples.join('\n') : '(tidak ada contoh)'
+    ]);
+  }
 
-  // Styling
+  // Satu kali tulis semua
+  var dataRange = sheet.getRange(1, 1, output.length, numCols);
+  dataRange.setValues(output);
+
+  // 4. Batch styling header
+  var headerRange = sheet.getRange(1, 1, 1, numCols);
+  headerRange
+    .setFontWeight('bold')
+    .setBackground('#4a86e8')
+    .setFontColor('white')
+    .setHorizontalAlignment('center');
+
+  // 5. Styling kolom
   sheet.setColumnWidths(1, 1, 40);
   sheet.setColumnWidths(2, 1, 80);
   sheet.setColumnWidths(3, 1, 140);
@@ -511,34 +522,30 @@ function prepareTopicNameSheet() {
   sheet.setColumnWidths(5, 1, 230);
   sheet.setColumnWidths(6, 1, 350);
 
-  // Wrapping untuk kolom contoh
-  var sampleRange = sheet.getRange(2, 6, unresolved.length, 1);
-  sampleRange.setWrap(true);
+  // 6. Wrap text kolom contoh
+  sheet.getRange(2, 6, n, 1).setWrap(true);
 
-  // Highlight kolom isian (kuning)
-  var inputRange = sheet.getRange(2, 5, unresolved.length, 1);
-  inputRange.setBackground('#fff3cd');
+  // 7. Highlight kolom input (kuning)
+  sheet.getRange(2, 5, n, 1).setBackground('#fff3cd');
 
-  // Set row height biar cukup untuk 2 baris teks
-  for (var i = 0; i < unresolved.length; i++) {
-    sheet.setRowHeight(i + 2, 40);
+  // 8. Row height
+  for (var ri = 0; ri < n; ri++) {
+    sheet.setRowHeight(ri + 2, 40);
   }
 
-  // Freeze header
+  // 9. Freeze header + aktifkan
   sheet.setFrozenRows(1);
-
   getSS().setActiveSheet(sheet);
 
+  // 10. Alert ringkas
   ui.alert(
     '✅ Sheet _IsiNamaTopik siap!\n\n'
-    + 'Cara isi:\n'
-    + '1. Lihat kolom "📄 Contoh Pesan" — itu contoh chat dari topik tsb\n'
-    + '2. Dari contoh, kamu bisa tebak nama kotanya\n'
-    + '3. Ketik nama di kolom kuning "✏️ Nama Baru"\n'
-    + '   Contoh: Kajian Jakarta\n'
-    + '4. Setelah semua diisi, jalankan:\n'
-    + '   📌 Manajemen Topik > Terapkan Nama dari Sheet\n'
-    + '5. Nama otomatis terisi di log & report.'
+    + n + ' topik tanpa nama terdaftar.\n\n'
+    + 'Cara:\n'
+    + '1. Lihat kolom "📄 Contoh Pesan"\n'
+    + '2. Dari situ tebak nama kotanya\n'
+    + '3. Ketik di kolom kuning "✏️ Nama Baru"\n'
+    + '4. Jalankan: ✅ Terapkan Nama dari Sheet'
   );
 }
 
