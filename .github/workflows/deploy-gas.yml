@@ -31,12 +31,17 @@ jobs:
           chmod 600 ~/.clasprc.json
           echo "✅ Auth file: $(wc -c < ~/.clasprc.json) bytes"
 
-      - name: 📝 Inject Script ID
+      - name: 📝 Create .clasp.json from Secret
+        env:
+          SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
         run: |
-          # Update .clasp.json dengan Script ID dari Secrets
-          sed -i "s/YOUR_SCRIPT_ID_HERE/${{ secrets.GAS_SCRIPT_ID }}/g" .clasp.json
-          echo "🔍 .clasp.json:"
-          cat .clasp.json
+          cat > .clasp.json << EOF
+          {
+            "scriptId": "${SCRIPT_ID}",
+            "rootDir": "src"
+          }
+          EOF
+          echo "✅ .clasp.json created with Script ID: ${SCRIPT_ID}"
 
       - name: 🚀 Push to GAS
         run: clasp push -f
