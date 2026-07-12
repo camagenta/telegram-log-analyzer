@@ -19,7 +19,7 @@ function sendText(chatId, text, opts) {
   var payload = {
     chat_id: chatId,
     text: text,
-    parse_mode: 'HTML'
+    parse_mode: opts && opts.parse_mode ? opts.parse_mode : 'HTML'
   };
 
   // Merge optional params

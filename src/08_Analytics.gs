@@ -857,7 +857,9 @@ function formatReportForTelegram_(report) {
   var lb = '\n';
 
   var text = '';
-  text += '📊 *REKAP BULANAN* ' + monthName + ' ' + p.year + lb;
+  text += '📊 *LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM*' + lb;
+  text += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + lb;
+  text += '🗓️ ' + monthName + ' ' + p.year + lb + lb;
   text += '━━━━━━━━━━━━━━━━━━━' + lb;
   text += '📝 *Total Pesan:* ' + report.totalMessages + lb + lb;
 
@@ -928,4 +930,214 @@ function extractGroupChatIds_(rows) {
     }
   });
   return Object.keys(ids);
+}
+
+// ============================================================
+//  JADWAL REPORT BULANAN (Tiap tanggal 12)
+// ============================================================
+
+/**
+ * Setup konfigurasi target report & trigger jadwal.
+ */
+function setupScheduledReport() {
+  var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
+
+  // 1. Chat ID / Username tujuan
+  var chatId = props.getProperty('SCHEDULE_CHAT_ID') || '@sijadwalkajian';
+  var chatRes = ui.prompt(
+    '📤 Target Chat Report',
+    'Chat ID / username tujuan:\n(Cth: @sijadwalkajian atau numeric ID)',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (chatRes.getSelectedButton() !== ui.Button.OK) return;
+  var newChatId = chatRes.getResponseText().trim();
+  if (newChatId) props.setProperty('SCHEDULE_CHAT_ID', newChatId);
+
+  // 2. Topic ID (message_thread_id)
+  var topicId = props.getProperty('SCHEDULE_TOPIC_ID') || '192';
+  var topicRes = ui.prompt(
+    '📌 Topic / Thread ID',
+    'Message Thread ID tujuan:\n(Cth: 192 untuk t.me/c/sijadwalkajian/192)',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (topicRes.getSelectedButton() !== ui.Button.OK) return;
+  var newTopicId = topicRes.getResponseText().trim();
+  if (newTopicId) props.setProperty('SCHEDULE_TOPIC_ID', newTopicId);
+
+  // 3. Header kustom
+  var header = props.getProperty('SCHEDULE_HEADER') || 'LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM';
+  var headerRes = ui.prompt(
+    '📝 Header Report',
+    'Teks header laporan:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (headerRes.getSelectedButton() !== ui.Button.OK) return;
+  var newHeader = headerRes.getResponseText().trim();
+  if (newHeader) props.setProperty('SCHEDULE_HEADER', newHeader);
+
+  // 4. Hari dalam bulan
+  var day = props.getProperty('SCHEDULE_DAY') || '12';
+  var dayRes = ui.prompt(
+    '📅 Tanggal Eksekusi',
+    'Tanggal setiap bulan (1-28):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (dayRes.getSelectedButton() !== ui.Button.OK) return;
+  var newDay = dayRes.getResponseText().trim();
+  if (newDay) props.setProperty('SCHEDULE_DAY', newDay);
+
+  ui.alert(
+    '✅ Konfigurasi tersimpan!\n\n'
+    + 'Target: ' + (newChatId || chatId) + '\n'
+    + 'Topic ID: ' + (newTopicId || topicId) + '\n'
+    + 'Tanggal: setiap tgl ' + (newDay || day) + '\n\n'
+    + 'Sekarang pasang trigger:\n📊 Analisa Bulanan > Pasang Trigger Jadwal'
+  );
+}
+
+/**
+ * Kirim teks panjang (split >4000 chars).
+ */
+function sendLongText_(chatId, text, opts) {
+  var maxLen = 4000;
+  if (text.length <= maxLen) {
+    sendText(chatId, text, opts);
+    return 1;
+  }
+
+  var parts = [];
+  var remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      parts.push(remaining);
+      break;
+    }
+    // Cari newline terdekat sebelum maxLen biar gak potong kalimat
+    var cutAt = remaining.lastIndexOf('\n', maxLen);
+    if (cutAt < 100) cutAt = maxLen; // fallback kalau gada newline
+    parts.push(remaining.substring(0, cutAt));
+    remaining = remaining.substring(cutAt).trim();
+  }
+
+  var sent = 0;
+  parts.forEach(function (part, i) {
+    if (i > 0) {
+      part = '_(lanjutan)_\n' + part;
+    }
+    if (i < parts.length - 1) {
+      part += '\n\n_(bersambung...)__';
+    }
+    sendText(chatId, part, opts);
+    sent++;
+  });
+  return sent;
+}
+
+/**
+ * Generate report bulan lalu + kirim ke Telegram.
+ * Fungsi ini dipanggil oleh trigger otomatis.
+ */
+function generateAndSendScheduledReport() {
+  var props = PropertiesService.getScriptProperties();
+  var targetChat = props.getProperty('SCHEDULE_CHAT_ID') || '@sijadwalkajian';
+  var targetTopic = props.getProperty('SCHEDULE_TOPIC_ID') || '192';
+  var customHeader = props.getProperty('SCHEDULE_HEADER') || 'LAPORAN AKTIVITAS SIJADWAL KAJIAN TELEGRAM';
+
+  // Dapatkan bulan terakhir yg punya data
+  var available = getAvailableMonths();
+  if (available.length === 0) {
+    console.log('Scheduled report: tidak ada data');
+    return;
+  }
+
+  var latest = available[0];
+  var allRows = getAllRows();
+  var filtered = filterByMonth_(allRows, latest.year, latest.month);
+
+  if (filtered.length === 0) {
+    console.log('Scheduled report: data kosong untuk ' + latest.year + '-' + latest.month);
+    return;
+  }
+
+  // 1. Generate sheet (artefak)
+  var sheetResult = JSON.parse(generateMonthlyReport(latest.year, latest.month));
+  if (!sheetResult.success) {
+    console.log('Scheduled report: gagal generate sheet - ' + sheetResult.error);
+    return;
+  }
+
+  // 2. Build text report
+  var report = buildFullReport_(filtered, allRows, latest.year, latest.month);
+  var text = formatReportForTelegram_(report);
+
+  // 3. Ganti header pertama dengan custom header
+  text = text.replace(/^📊.*$/m, '📊 *' + customHeader + '*');
+  text = text.replace(/^━━.*$/m, '━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+  // 4. Kirim ke Telegram (split if needed)
+  var opts = {
+    parse_mode: 'Markdown',
+    message_thread_id: parseInt(targetTopic) || targetTopic
+  };
+
+  var sentCount = sendLongText_(targetChat, text, opts);
+
+  console.log(
+    'Scheduled report selesai: ' + getMonthName_(latest.month) + ' ' + latest.year
+    + ' → ' + targetChat + ' (topic:' + targetTopic + ')'
+    + ', ' + sentCount + ' pesan terkirim'
+  );
+}
+
+/**
+ * Pasang trigger jadwal bulanan.
+ */
+function installMonthlyReportTrigger() {
+  var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
+  var day = parseInt(props.getProperty('SCHEDULE_DAY')) || 12;
+
+  // Hapus trigger lama dulu
+  removeMonthlyReportTrigger_();
+
+  ScriptApp.newTrigger('generateAndSendScheduledReport')
+    .timeBased()
+    .onMonthDay(day)
+    .atHour(8)
+    .nearMinute(0)
+    .inTimezone('Asia/Jakarta')
+    .create();
+
+  ui.alert(
+    '✅ Trigger terpasang!\n\n'
+    + 'Report akan otomatis dikirim setiap tanggal ' + day
+    + ' pukul 08:00 WIB.\n\n'
+    + 'Gunakan "Hapus Trigger" untuk menonaktifkan.'
+  );
+}
+
+/**
+ * Hapus semua trigger report bulanan.
+ */
+function removeMonthlyReportTrigger_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (t) {
+    if (t.getHandlerFunction() === 'generateAndSendScheduledReport') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+function removeMonthlyReportTrigger() {
+  removeMonthlyReportTrigger_();
+  SpreadsheetApp.getUi().alert('✅ Trigger jadwal report dihapus.');
+}
+
+/**
+ * Test generate & kirim report (untuk bulan terakhir).
+ */
+function testScheduledReport() {
+  var ui = SpreadsheetApp.getUi();
+  generateAndSendScheduledReport();
+  ui.alert('✅ Test report selesai! Cek Telegram.');
 }

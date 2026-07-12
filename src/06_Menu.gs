@@ -34,10 +34,20 @@ function onOpen() {
   subAnalisa.addSeparator();
   subAnalisa.addItem('📅 Custom Range (Datepicker)', 'showDateRangePicker');
   subAnalisa.addSeparator();
-  subAnalisa.addItem('📤 Kirim Report ke Telegram', 'sendMonthlyReportToTelegram');
+  subAnalisa.addItem('📤 Kirim Report ke Telegram (Manual)', 'sendMonthlyReportToTelegram');
   subAnalisa.addSeparator();
   subAnalisa.addItem('🔧 Setup HTML Picker', 'setupHtmlPicker');
   mainMenu.addSubMenu(subAnalisa);
+
+  // Submenu: Jadwal Report
+  var subJadwal = ui.createMenu('📅 Jadwal Report Bulanan');
+  subJadwal.addItem('⚙️ Setup Target & Header', 'setupScheduledReport');
+  subJadwal.addSeparator();
+  subJadwal.addItem('▶️ Test Generate & Kirim Sekarang', 'testScheduledReport');
+  subJadwal.addSeparator();
+  subJadwal.addItem('🔗 Pasang Trigger (Tgl 12)', 'installMonthlyReportTrigger');
+  subJadwal.addItem('🔗 Hapus Trigger', 'removeMonthlyReportTrigger');
+  mainMenu.addSubMenu(subJadwal);
   mainMenu.addSeparator();
 
   // Submenu: Topik Management
@@ -73,6 +83,7 @@ function onOpen() {
     .addItem('📊 Per Bulan', 'showMonthlyReportPicker')
     .addItem('📅 Custom Range', 'showDateRangePicker')
     .addItem('📤 Kirim ke Telegram', 'sendMonthlyReportToTelegram')
+    .addItem('📅 Test Jadwal Report', 'testScheduledReport')
     .addItem('🔄 Refresh', 'refreshDataValidation')
     .addToUi();
 }
