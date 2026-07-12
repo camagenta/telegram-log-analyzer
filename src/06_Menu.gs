@@ -46,6 +46,8 @@ function onOpen() {
   subTopics.addItem('✅ Terapkan Nama dari Sheet', 'applyTopicNamesFromSheet');
   subTopics.addSeparator();
   subTopics.addItem('🔄 Batch Resolve dari Cache', 'batchResolveTopicNames');
+  subTopics.addSeparator();
+  subTopics.addItem('⚠️ Reset Semua Nama Topik', 'resetAllTopicNames');
   mainMenu.addSubMenu(subTopics);
   mainMenu.addSeparator();
 

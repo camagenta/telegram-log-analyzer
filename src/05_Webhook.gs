@@ -674,41 +674,101 @@ function applyTopicNamesFromSheet() {
 }
 
 /**
- * Batch re-discover: scan semua topik yang masih '-' dan coba resolve.
- * Untuk topik yang sudah ada nama di PropertiesService, update sheet.
+ * Reset semua nama topik — bersihkan log + PropertiesService.
+ * Gunakan kalau ada anomali/geser data.
  */
-function batchResolveTopicNames() {
-  var rows = getAllRows();
+function resetAllTopicNames() {
+  var ui = SpreadsheetApp.getUi();
+
+  var confirm = ui.alert(
+    '⚠️ Reset Semua Nama Topik',
+    'Ini akan MENGHAPUS semua nama topik yang sudah kamu set.\n\n'
+    + '• Cache PropertiesService dibersihkan\n'
+    + '• Kolom Topic Name di log direset ke "-"\n'
+    + '• Sheet _IsiNamaTopik & _ScanTopik dihapus\n'
+    + 'LANJUTKAN?',
+    ui.ButtonSet.YES_NO
+  );
+  if (confirm !== ui.Button.YES) return;
+
   var props = PropertiesService.getScriptProperties();
-  var resolved = {};
-  var updated = 0;
-
-  rows.forEach(function (row, idx) {
-    var topicId = row[COL.TOPIC_ID];
-    var topicName = row[COL.TOPIC_NAME];
-
-    if (topicId && topicId.toString() !== '' && topicId.toString() !== '-') {
-      var key = topicId.toString().trim();
-      var savedName = props.getProperty('TOPIC_' + key);
-
-      if (savedName && savedName !== '-' && (!topicName || topicName === '-')) {
-        // Ada di PropertiesService tapi belum di sheet → update
-        resolved[key] = savedName;
-      }
+  var allKeys = props.getKeys();
+  var cleared = 0;
+  allKeys.forEach(function (k) {
+    if (k.indexOf('TOPIC_') === 0) {
+      props.deleteProperty(k);
+      cleared++;
     }
   });
 
-  // Update sheet
-  for (var key in resolved) {
-    if (resolved.hasOwnProperty(key)) {
-      var n = updateTopicNameInSheet_(key, resolved[key]);
-      updated += n;
+  // Hapus sheet
+  var ss = getSS();
+  ['_IsiNamaTopik', '_ScanTopik', '_GrupTerhubung'].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (sh) ss.deleteSheet(sh);
+  });
+
+  // Reset kolom Topic Name di log
+  var logSheet = getSheet();
+  var logData = logSheet.getDataRange().getValues();
+  var resetCount = 0;
+  for (var ri = 1; ri < logData.length; ri++) {
+    var tid = logData[ri][COL.TOPIC_ID];
+    if (tid && tid.toString().trim() !== '' && tid.toString().trim() !== '-') {
+      logData[ri][COL.TOPIC_NAME] = '-';
+      resetCount++;
     }
   }
+  logSheet.getRange(1, 1, logData.length, logData[0].length).setValues(logData);
 
+  ui.alert(
+    '✅ Reset selesai!\n\n'
+    + '• ' + cleared + ' cache PropertiesService dihapus\n'
+    + '• ' + resetCount + ' baris log direset\n\n'
+    + 'Sekarang jalankan:\n'
+    + '📌 Manajemen Topik > 📋 Siapkan Sheet Isian Nama Topik\n'
+    + 'untuk mulai dari awal.'
+  );
+}
+
+/**
+ * Batch re-discover: scan topik yang masih '-' dari cache PropertiesService.
+ */
+function batchResolveTopicNames() {
+  var data = getAllRows();
+  var props = PropertiesService.getScriptProperties();
+  var allKeys = props.getProperties();
+  var resolved = {};
+  for (var key in allKeys) {
+    if (key.indexOf('TOPIC_') === 0) {
+      resolved[key.replace('TOPIC_', '')] = allKeys[key];
+    }
+  }
+  if (Object.keys(resolved).length === 0) {
+    SpreadsheetApp.getUi().alert('ℹ️ Tidak ada nama topik di cache PropertiesService.');
+    return;
+  }
+
+  var logSheet = getSheet();
+  var logData = logSheet.getDataRange().getValues();
+  var updated = 0;
+  for (var ri = 1; ri < logData.length; ri++) {
+    var tid = logData[ri][COL.TOPIC_ID];
+    var curr = logData[ri][COL.TOPIC_NAME];
+    if (tid) {
+      var key = tid.toString().trim();
+      if (resolved[key] && (!curr || curr === '-' || curr.toString().trim() === '')) {
+        logData[ri][COL.TOPIC_NAME] = resolved[key];
+        updated++;
+      }
+    }
+  }
+  if (updated > 0) {
+    logSheet.getRange(1, 1, logData.length, logData[0].length).setValues(logData);
+  }
   SpreadsheetApp.getUi().alert(
     updated > 0
-      ? '✅ ' + updated + ' baris diupdate dari PropertiesService.'
-      : 'ℹ️ Tidak ada data baru. Gunakan "Set Topic Name" untuk input manual.'
+      ? '✅ ' + updated + ' baris diupdate dari cache PropertiesService.'
+      : 'ℹ️ Tidak ada yang perlu diupdate.'
   );
 }
